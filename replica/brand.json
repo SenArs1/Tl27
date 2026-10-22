@@ -1,0 +1,5 @@
+{
+  "avoid": ["TravelLine", "Travel Line", "travelline", "TL: ", "WebPMS", "HotelGPT"],
+  "domains": ["travelline.ru", "travelline.com"],
+  "colors": ["#227bdd", "#297cdb", "#f02759", "#1b60cf"]
+}

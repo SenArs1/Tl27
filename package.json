@@ -1,0 +1,25 @@
+{
+  "name": "stayra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stayra: booking engine, channel manager and extranet for small hotels",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning src/index.js",
+    "dev": "node --no-warnings=ExperimentalWarning --watch src/index.js",
+    "seed": "node --no-warnings=ExperimentalWarning src/seed-cli.js",
+    "test": "node --no-warnings=ExperimentalWarning --test \"tests/*.test.js\"",
+    "test:e2e": "playwright test",
+    "check": "npm test && npm run test:e2e"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.56.1"
+  }
+}

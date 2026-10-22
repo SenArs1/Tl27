@@ -1,0 +1,40 @@
+feature,area,priority,original,clone,notes
+Marketing home with positioning stats products property types FAQ,marketing,must,yes,yes,
+Header mega-menu with products and solutions,marketing,must,yes,yes,
+Product pages for each tool,marketing,must,yes,yes,
+Solutions per property type,marketing,should,yes,yes,
+Price constructor by property type and room count,marketing,must,yes,yes,
+Demo request form with validation,marketing,must,yes,yes,
+Contacts page,marketing,should,yes,yes,
+Knowledge base with search,support,should,yes,yes,
+About page,marketing,could,yes,yes,
+Booking engine search by dates and guests,booking engine,must,yes,yes,
+Room types with photos description capacity and price for stay,booking engine,must,yes,yes,
+Several rate plans per room (refundable/non-refundable/breakfast),booking engine,must,yes,yes,
+Guest details form,booking engine,must,yes,yes,
+Extras / upsell at checkout,booking engine,should,yes,yes,
+Promo codes,booking engine,should,yes,yes,
+No overbooking: availability checked atomically,booking engine,must,yes,yes,
+Confirmation page with booking code,booking engine,must,yes,yes,
+Guest can find and cancel booking,booking engine,must,yes,yes,
+Embed widget code for hotel site,booking engine,should,yes,yes,"/widget.js, shadow DOM"
+Online payment by card,payments,should,yes,skip,needs the owner's acquirer contract; test method only
+Loyalty program,booking engine,could,yes,partial,only described on the product page; no member accounts
+Extranet sign in,extranet,must,yes,yes,
+Dashboard with arrivals departures occupancy revenue,extranet,must,yes,yes,
+Bookings list with filters,extranet,must,yes,yes,
+Booking detail and status changes,extranet,must,yes,yes,
+Availability and price grid (chessboard) editable,extranet,must,yes,yes,
+Close / open sales per date,extranet,must,yes,yes,
+Room types and rate plans management,extranet,must,yes,yes,
+Leads inbox from demo requests,extranet,should,yes,yes,
+Hotel settings,extranet,should,yes,yes,
+Channel manager: connect channels and push availability,channel manager,must,yes,yes,simulated channels with sync log; no real OTA APIs
+Channel sync log,channel manager,should,yes,yes,
+Bulk update of prices for a date range,extranet,should,yes,yes,
+Reports (occupancy / revenue by period),extranet,should,yes,yes,
+Real OTA connections (130+ channels),channel manager,could,yes,skip,partner contracts and certified APIs
+MVD registration e-keys Wi-Fi iiko,integrations,could,yes,skip,regulated / hardware / partner integrations
+Rate shopper data,add-ons,could,yes,skip,competitor price scraping is their data pipeline
+Reputation reviews aggregation,add-ons,could,yes,skip,OTA reviews data not ours
+Customer logos testimonials photos,marketing,could,yes,skip,their content
