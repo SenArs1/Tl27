@@ -53,6 +53,19 @@ export function seed(db, now = new Date()) {
   insExtra.run(hotelId, 'Сауна, 2 часа', 'Общая сауна на первом этаже.', 2500, 'stay', gRest);
   insExtra.run(hotelId, 'Ранний заезд с 08:00', 'Если номер свободен, заселим с утра.', 1500, 'stay', gStay);
 
+  // Age groups: under 3 sleep with parents, 3–6 and 7–13 take a place; 14+ are adults.
+  db.prepare('delete from child_age_groups where hotel_id = ?').run(hotelId);
+  const insGroupAge = db.prepare('insert into child_age_groups (hotel_id, name, max_age, no_bed, meal_pct) values (?,?,?,?,?)');
+  const gBaby = Number(insGroupAge.run(hotelId, 'Малыши', 3, 1, 0).lastInsertRowid);
+  const gKid = Number(insGroupAge.run(hotelId, 'Дети', 7, 0, 50).lastInsertRowid);
+  const gTeen = Number(insGroupAge.run(hotelId, 'Школьники', 14, 0, 100).lastInsertRowid);
+  db.prepare('update hotels set child_max_age = 14 where id = ?').run(hotelId);
+  const insCp = db.prepare('insert into rate_child_prices (rate_id, group_id, price) values (?,?,?)');
+  for (const r of db.prepare('select id from rate_plans where hotel_id = ? and parent_id is null').all(hotelId)) {
+    insCp.run(r.id, gBaby, 0);
+    insCp.run(r.id, gKid, 600);
+    insCp.run(r.id, gTeen, 1000);
+  }
   db.prepare('insert into promo_codes (hotel_id, code, discount_pct) values (?,?,?)').run(hotelId, 'ONEGO10', 10);
   db.prepare("update channels set connected = 1 where hotel_id = ? and code in ('tripgo','nochleg')").run(hotelId);
 

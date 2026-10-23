@@ -11,11 +11,11 @@ Summary in our own words; links at the bottom.
 | --- | --- | --- |
 | Dashboard | arrivals/departures/in-house, occupancy, free rooms, unassigned bookings, cleaning, debts, ADR/RevPAR | ✅ all, plus a 14-day forecast and booking sources |
 | Chessboard | rows = rooms by category, columns = days, guest name on the bar, colours by status, debt mark, "Без номера" row, drag-to-move, booking from an empty cell, cleaning status, repair | ✅ all, plus changing dates by dragging the edge and split stays; ❌ booking lock |
-| Room stock | main and extra places, child ages, price by occupancy | ✅ main/extra places, extra-bed prices for adult/child in the rate, child age limit; ❌ several age groups |
+| Room stock | main and extra places, child ages, price by occupancy | ✅ main/extra places, extra-bed prices, child age groups with prices per rate and a "без места" mark |
 | Rates | meals, cancellation, prepayment, MinLOS, stop sale; derived rates; CTA/CTD | ✅ meals, cancellation, MinLOS, stop sale, derived rates (%/₽, rounding, 3 levels), CTA/CTD, single occupancy; ❌ MaxLOS |
 | Extras | categories, units (stay/night/guest), shown in the booking engine | ✅ groups ("folders"), units, grouped in the engine; ❌ VAT/54-FZ fields, "included in the rate" |
 | Booking journal | search by name/number/OTA number, filters by dates (stay/created), status, channel; Excel export; change history | ✅ search incl. channel number, filters, source; ❌ Excel export of the journal, history |
-| Reports | occupancy/revenue/ADR/RevPAR, sources, cancellations, payments, arrival/departure lists, tourist tax, MVD | ✅ occupancy and revenue (by day/category), sales and sources, cancellations, lists, tourist tax, CSV; ❌ MVD, cash report, pick-up |
+| Reports | occupancy/revenue/ADR/RevPAR, sources, cancellations, payments, arrival/departure lists, tourist tax, MVD | ✅ occupancy and revenue (by day/category), sales and sources, cancellations, lists, tourist tax, CSV; ✅ MVD list and registration form; ❌ cash report, pick-up |
 | Settings | profile, legal entity, check-in/out times, cancellation, prepayment, payment methods, tax, staff/roles, notifications | ✅ all of these; ❌ document templates, online receipts |
 | Chains | one account → several properties, access per property | ✅ property switcher, adding a property, access per property |
 
@@ -33,8 +33,8 @@ per-municipality rate table are next.
 
 1. ✅ Extend/shorten a stay by dragging on the chessboard; split into segments when moving to another room mid-stay (v3).
 2. ✅ Derived rates (−10% from the base, with rounding), CTA/CTD, single-occupancy price (v3).
-3. Child age groups (0–5, 6–12) with their own prices.
-4. Guest list for MVD and electronic check-in.
+3. ✅ Child age groups (0–5, 6–12) with their own prices (v4).
+4. ✅ Guest list for MVD (v4); electronic check-in and automatic submission are next.
 5. Roles "Горничная" (no personal data) and "Инвестор" (reports only).
 6. Booking change history; Excel export of the journal.
 7. Cancellation and prepayment rules with periods, deadlines and automatic cancellation.

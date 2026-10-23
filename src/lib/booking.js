@@ -35,10 +35,19 @@ export function parseSearch(q, hotel = {}, { staff = false, now = new Date() } =
   if (!Number.isInteger(adults) || adults < 1 || adults > 12) errors.adults = 'От 1 до 12 взрослых';
   if (!Number.isInteger(children) || children < 0 || children > 8) errors.children = 'От 0 до 8 детей';
   const promo = String(q.promo || '').trim().toUpperCase().slice(0, 32);
+  // Children's ages: "3, 7" or [3, 7]. Required when there are children, so the
+  // price can follow the hotel's age groups.
+  const rawAges = Array.isArray(q.ages) ? q.ages.join(',') : String(q.ages ?? '');
+  const ages = rawAges.split(/[\s,;]+/).filter(Boolean).map((x) => Number.parseInt(x, 10));
+  const maxAge = hotel.child_max_age ?? 17;
+  if (!errors.children && children > 0) {
+    if (ages.length !== children) errors.ages = `Укажите возраст каждого ребёнка (${children} ${children === 1 ? 'значение' : 'значения'} через запятую)`;
+    else if (ages.some((x) => !Number.isInteger(x) || x < 0 || x >= maxAge)) errors.ages = `Возраст ребёнка — от 0 до ${maxAge - 1} лет. Гости старше считаются взрослыми`;
+  }
   return {
     ok: Object.keys(errors).length === 0,
     errors,
-    query: { checkin, checkout, adults: adults || 0, children: children || 0, promo },
+    query: { checkin, checkout, adults: adults || 0, children: children || 0, ages: children > 0 && ages.length === children ? ages : [], promo },
   };
 }
 
@@ -52,14 +61,30 @@ export function findPromo(db, hotelId, code) {
   return db.prepare('select * from promo_codes where hotel_id = ? and code = ? and active = 1').get(hotelId, code) || null;
 }
 
-// Who sleeps where: adults take main places first, then children; the rest use extra beds.
-export function placement(room, adults, children) {
+// Age groups of a hotel, youngest first.
+export function childGroups(db, hotelId) {
+  return db.prepare('select * from child_age_groups where hotel_id = ? order by max_age').all(hotelId);
+}
+
+export function groupOf(groups, age) {
+  return groups.find((g) => age < g.max_age) || null;
+}
+
+// Who sleeps where. Adults take main places first, then children with a place,
+// oldest first; the rest use extra beds. Children of a "no place" group take none.
+// Without ages (old links, simple callers) every child is a child with a place.
+export function placement(room, adults, children, ages = [], groups = []) {
   const main = room.capacity;
   const extraAdults = Math.max(0, adults - main);
   const freeMain = Math.max(0, main - adults);
-  const extraChildren = Math.max(0, children - freeMain);
-  const fits = extraAdults + extraChildren <= (room.extra_beds || 0);
-  return { extraAdults, extraChildren, fits };
+  const kids = ages.length === children && groups.length
+    ? ages.map((age) => ({ age, group: groupOf(groups, age) })).sort((a, b) => b.age - a.age)
+    : Array.from({ length: children }, () => ({ age: null, group: null }));
+  const noBed = kids.filter((k) => k.group && k.group.no_bed);
+  const withBed = kids.filter((k) => !(k.group && k.group.no_bed));
+  const kidsExtra = withBed.slice(freeMain);
+  const fits = extraAdults + kidsExtra.length <= (room.extra_beds || 0);
+  return { extraAdults, extraChildren: kidsExtra.length, kidsExtra, noBed, kids, fits };
 }
 
 export const MAX_RATE_DEPTH = 3;
@@ -80,15 +105,28 @@ export function rateNightly(rate, base, rates = new Map(), depth = 0) {
 
 // Price of a stay for one rate. Promo applies to lodging and meals; tourist tax is
 // charged on lodging only (not on meals or services).
-export function priceStay({ nightly, rate, rates, room = { capacity: 99, extra_beds: 0 }, adults, children = 0, promo, hotel = {} }) {
+export function priceStay({ nightly, rate, rates, room = { capacity: 99, extra_beds: 0 }, adults, children = 0, ages = [], groups = [], promo, hotel = {} }) {
   const n = nightly.length;
-  const pl = placement(room, adults, children);
+  const pl = placement(room, adults, children, ages, groups);
   const base = nightly.reduce((s, p) => s + p, 0);
   const rated = nightly.reduce((s, p) => s + rateNightly(rate, p, rates), 0);
   const single = adults === 1 && children === 0 ? Math.min(rate.single_discount || 0, Math.floor(rated / Math.max(n, 1))) * n : 0;
   const rateDiscount = base - rated + single;
-  const extraBeds = (pl.extraAdults * (rate.extra_adult_price || 0) + pl.extraChildren * (rate.extra_child_price || 0)) * n;
-  const meals = (rate.meal_price || 0) * (adults + children) * n;
+  // A group price set on the rate wins; otherwise the rate's generic child extra-bed
+  // price, and nothing for children who take no place.
+  // Derived rates without their own child price inherit it from the parent rate.
+  const childPrice = (k, noBed) => {
+    if (k.group) {
+      for (let r = rate, depth = 0; r && depth <= MAX_RATE_DEPTH; r = r.parent_id && rates ? rates.get(r.parent_id) : null, depth++) {
+        if (r.childPrices && r.childPrices[k.group.id] !== undefined) return r.childPrices[k.group.id];
+      }
+    }
+    return noBed ? 0 : rate.extra_child_price || 0;
+  };
+  const kidsBeds = pl.kidsExtra.reduce((s, k) => s + childPrice(k, false), 0) + pl.noBed.reduce((s, k) => s + childPrice(k, true), 0);
+  const extraBeds = (pl.extraAdults * (rate.extra_adult_price || 0) + kidsBeds) * n;
+  const kidsMeals = pl.kids.reduce((s, k) => s + (k.group ? k.group.meal_pct : 100), 0) / 100;
+  const meals = Math.round((rate.meal_price || 0) * (adults + kidsMeals) * n);
   const lodging = base - rateDiscount + extraBeds;
   const pct = promo ? promo.discount_pct : 0;
   const promoLodging = Math.round((lodging * pct) / 100);
@@ -103,8 +141,12 @@ export function taxFor(hotel, lodging, nights) {
   return hotel.tax_bp ? Math.max(Math.round((lodging * hotel.tax_bp) / 10000), (hotel.tax_min_night || 0) * nights) : 0;
 }
 
+// All rates of a hotel by id, each with its child prices by age group.
 export function ratesMap(db, hotelId) {
-  return new Map(db.prepare('select * from rate_plans where hotel_id = ?').all(hotelId).map((r) => [r.id, r]));
+  const rates = new Map(db.prepare('select * from rate_plans where hotel_id = ?').all(hotelId).map((r) => [r.id, { ...r, childPrices: {} }]));
+  const rows = db.prepare('select cp.* from rate_child_prices cp join rate_plans r on r.id = cp.rate_id where r.hotel_id = ?').all(hotelId);
+  for (const cp of rows) if (rates.has(cp.rate_id)) rates.get(cp.rate_id).childPrices[cp.group_id] = cp.price;
+  return rates;
 }
 
 export function extrasTotal(extras, chosenIds, nights, guests) {
@@ -134,13 +176,14 @@ export function searchOffers(db, hotel, query) {
   const promo = findPromo(db, hotel.id, query.promo);
   const rooms = db.prepare('select * from room_types where hotel_id = ? and active = 1 and total_rooms > 0 order by sort, id').all(hotel.id);
   const all = ratesMap(db, hotel.id);
+  const groups = childGroups(db, hotel.id);
   const rates = [...all.values()].filter((r) => r.active).sort((a, b) => a.id - b.id);
   const inv = db.prepare('select * from inventory where room_type_id = ? and date >= ? and date < ? order by date');
   const offers = rooms.map((room) => {
     ensureInventory(db, room, nights);
     const rows = inv.all(room.id, query.checkin, query.checkout);
     const r = restrictionOf(db, room, query, rows);
-    const pl = placement(room, query.adults, query.children);
+    const pl = placement(room, query.adults, query.children, query.ages, groups);
     let reason = null;
     if (!pl.fits) reason = 'capacity';
     else if (r.left <= 0) reason = 'sold_out';
@@ -148,7 +191,7 @@ export function searchOffers(db, hotel, query) {
     else if (r.cta) reason = 'cta';
     else if (r.ctd) reason = 'ctd';
     const nightly = rows.map((x) => x.price);
-    const rateOffers = rates.map((rate) => ({ rate, price: priceStay({ nightly, rate, rates: all, room, adults: query.adults, children: query.children, promo, hotel }) }));
+    const rateOffers = rates.map((rate) => ({ rate, price: priceStay({ nightly, rate, rates: all, room, adults: query.adults, children: query.children, ages: query.ages, groups, promo, hotel }) }));
     return { room, left: r.left, minStay: r.minStay, reason, available: !reason, rates: rateOffers };
   });
   return { nights: nights.length, guests, promo, promoInvalid: Boolean(query.promo && !promo), offers };
@@ -191,7 +234,9 @@ export function createBooking(db, hotel, input) {
     const rates = ratesMap(db, hotel.id);
     const rate = rates.get(Number(rateId));
     if (!room || !rate || !rate.active) throw new BookingError('not_found', 'Такой номер или тариф больше не продаётся');
-    const pl = placement(room, query.adults, query.children);
+    const groups = childGroups(db, hotel.id);
+    const ages = query.ages || [];
+    const pl = placement(room, query.adults, query.children, ages, groups);
     if (!pl.fits) throw new BookingError('capacity', 'В этот номер столько гостей не поместится, даже с дополнительными местами');
     const nights = nightsOf(query.checkin, query.checkout);
     ensureInventory(db, room, nights);
@@ -214,7 +259,7 @@ export function createBooking(db, hotel, input) {
       physical = findFreeRoom(db, room.id, query.checkin, query.checkout);
     }
     const promo = findPromo(db, hotel.id, query.promo);
-    const price = priceStay({ nightly: rows.map((r) => r.price), rate, rates, room, adults: query.adults, children: query.children, promo, hotel });
+    const price = priceStay({ nightly: rows.map((r) => r.price), rate, rates, room, adults: query.adults, children: query.children, ages, groups, promo, hotel });
     if (Number.isInteger(priceOverride) && priceOverride >= 0) {
       price.stay = priceOverride;
       price.tax = taxFor(hotel, priceOverride, nights.length);
@@ -230,12 +275,12 @@ export function createBooking(db, hotel, input) {
     const code = newCode();
     const r = db.prepare(`insert into bookings (code, idem_key, hotel_id, room_type_id, rate_plan_id, checkin, checkout, adults, children,
       guest_name, guest_email, guest_phone, comment, extras, promo_code, nights_total, extras_total, discount_total, extra_beds_total, tax_total, total,
-      payment, paid, paid_amount, source, created_by, channel_ref)
-      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      payment, paid, paid_amount, source, created_by, channel_ref, children_ages)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       code, idemKey || null, hotel.id, room.id, rate.id, query.checkin, query.checkout, query.adults, query.children,
       guest.name, guest.email || '', guest.phone, guest.comment || '', JSON.stringify(ex.lines), promo ? promo.code : null,
       price.stay, ex.total, Math.max(0, price.rateDiscount) + price.promoDiscount, price.extraBeds, price.tax, total,
-      payment === 'card' ? 'card' : 'hotel', prepaid >= total ? 1 : 0, prepaid, source, createdBy, channelRef,
+      payment === 'card' ? 'card' : 'hotel', prepaid >= total ? 1 : 0, prepaid, source, createdBy, channelRef, JSON.stringify(ages),
     );
     const id = Number(r.lastInsertRowid);
     db.prepare('insert into stay_segments (booking_id, hotel_id, room_type_id, room_id, start, end) values (?,?,?,?,?,?)')
@@ -328,7 +373,7 @@ function targetRoom(db, b, roomId, start, end) {
   if (target.status === 'repair') throw new BookingError('room', `Номер ${target.number} на ремонте`);
   if (!roomIsFree(db, target.id, start, end, b.id)) throw new BookingError('room_busy', `Номер ${target.number} на эти даты занят`);
   const type = db.prepare('select * from room_types where id = ?').get(target.room_type_id);
-  if (!placement(type, b.adults, b.children).fits) throw new BookingError('capacity', `В номер ${target.number} не поместятся ${b.adults + b.children} гостей`);
+  if (!placement(type, b.adults, b.children, JSON.parse(b.children_ages || '[]'), childGroups(db, b.hotel_id)).fits) throw new BookingError('capacity', `В номер ${target.number} не поместятся ${b.adults + b.children} гостей`);
   return target;
 }
 
@@ -406,15 +451,17 @@ export function changeDates(db, hotel, booking, checkin, checkout) {
     const added = after.flatMap((s) => nightsOf(s.start, s.end).filter((d) => d < b.checkin || d >= b.checkout).map((d) => ({ d, type: s.room_type_id })));
     const rates = ratesMap(db, b.hotel_id);
     const rate = rates.get(b.rate_plan_id);
+    const groups = childGroups(db, b.hotel_id);
+    const ages = JSON.parse(b.children_ages || '[]');
     let addedStay = 0;
     for (const { d, type } of added) {
       const room = db.prepare('select * from room_types where id = ?').get(type);
       const inv = db.prepare('select price from inventory where room_type_id = ? and date = ?').get(type, d);
-      addedStay += priceStay({ nightly: [inv.price], rate, rates, room, adults: b.adults, children: b.children }).stay;
+      addedStay += priceStay({ nightly: [inv.price], rate, rates, room, adults: b.adults, children: b.children, ages, groups }).stay;
     }
     const stay = Math.round((b.nights_total / oldN) * kept.length) + addedStay;
     const n = diffDays(checkin, checkout);
-    const meals = (rate.meal_price || 0) * (b.adults + b.children) * n;
+    const meals = priceStay({ nightly: Array(n).fill(0), rate: { ...rate, adjust_value: 0, discount_pct: 0, single_discount: 0 }, room: { capacity: 99, extra_beds: 99 }, adults: b.adults, children: b.children, ages, groups }).meals;
     const tax = taxFor(hotel, Math.max(0, stay - meals), n);
     const lines = JSON.parse(b.extras || '[]').map((l) => {
       const qty = l.per === 'night' ? n : l.per === 'guest_night' ? n * (b.adults + b.children) : l.qty;

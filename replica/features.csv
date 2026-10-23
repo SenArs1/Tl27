@@ -46,7 +46,7 @@ Split stay into segments when moving mid-stay,extranet,could,yes,yes,"stay segme
 "Room stock: numbers, floors, sort order, cleaning status, repair",extranet,must,yes,yes,
 Configurable room order on the chessboard,extranet,should,yes,yes,by category / number / floor
 Main and extra places with adult/child extra-bed prices,rates,must,yes,yes,
-Child age groups with separate prices,rates,should,yes,partial,one age limit for now
+Child age groups with separate prices,rates,should,yes,yes,"groups per hotel (age bands, no-place, meal share); per-rate prices with inheritance; ages in search"
 Derived rates and CTA/CTD restrictions,rates,could,yes,yes,"parent rate, % or ₽, rounding, 3 levels; CTA/CTD per category and date; single occupancy discount"
 Extras grouped into folders,extras,should,yes,yes,
 Manual booking by staff with own price,extranet,must,yes,yes,
@@ -59,7 +59,7 @@ Reports: occupancy/ADR/RevPAR by day and category,reports,must,yes,yes,
 Reports: sales by source and cancellations,reports,should,yes,yes,
 Reports: arrivals / departures / in-house lists,reports,should,yes,yes,
 Reports CSV export,reports,should,yes,yes,
-MVD guest list and e-registration,reports,could,yes,no,regulated; next
+MVD guest list and e-registration,reports,could,yes,partial,"guest documents, registration card, MVD list with deadlines/status, CSV; sending to MVD is manual (no government API connection)"
 "Settings: booking window, cut-off, payment methods, prepay, cancellation, tax",settings,must,yes,yes,
 Staff and roles (owner / administrator),settings,must,yes,yes,
 Housekeeping and investor roles,settings,could,yes,no,next

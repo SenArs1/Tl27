@@ -35,6 +35,8 @@ export function createHotel(db, { name, city = '', propertyType = 'hotel', owner
     );
     const hotelId = Number(h.lastInsertRowid);
     db.prepare("insert into rate_plans (hotel_id, name, description) values (?, 'Базовый', 'Оплата при заселении, бесплатная отмена.')").run(hotelId);
+    // One age group to start with; the owner splits it in the settings.
+    db.prepare("insert into child_age_groups (hotel_id, name, max_age) values (?, 'Дети', 12)").run(hotelId);
     const insCh = db.prepare('insert into channels (hotel_id, code, name, commission_pct) values (?,?,?,?)');
     for (const c of DEFAULT_CHANNELS) insCh.run(hotelId, ...c);
     let userId = ownerUserId;

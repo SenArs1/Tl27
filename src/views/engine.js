@@ -11,7 +11,7 @@ export function statusBadge(s) {
 }
 
 function qs(query, extra = {}) {
-  const p = new URLSearchParams({ checkin: query.checkin, checkout: query.checkout, adults: query.adults, children: query.children, ...(query.promo ? { promo: query.promo } : {}), ...extra });
+  const p = new URLSearchParams({ checkin: query.checkin, checkout: query.checkout, adults: query.adults, children: query.children, ...(query.children && query.ages && query.ages.length ? { ages: query.ages.join(',') } : {}), ...(query.promo ? { promo: query.promo } : {}), ...extra });
   return p.toString();
 }
 
@@ -21,7 +21,8 @@ export function searchForm(hotel, query, errors = {}) {
     ${field({ name: 'checkin', label: 'Заезд', type: 'date', value: query.checkin, error: errors.checkin, attrs: `min="${t}" required` })}
     ${field({ name: 'checkout', label: 'Выезд', type: 'date', value: query.checkout, error: errors.checkout, attrs: `min="${addDays(t, 1)}" required` })}
     ${field({ name: 'adults', label: 'Взрослые', type: 'number', value: query.adults, error: errors.adults, attrs: 'min="1" max="12" inputmode="numeric"' })}
-    ${field({ name: 'children', label: `Дети до ${hotel.child_max_age ?? 12} лет`, type: 'number', value: query.children, error: errors.children, attrs: 'min="0" max="8" inputmode="numeric"' })}
+    ${field({ name: 'children', label: `Дети до ${hotel.child_max_age ?? 12} лет`, type: 'number', value: query.children, error: errors.children, attrs: 'min="0" max="8" inputmode="numeric" data-children' })}
+    <div data-ages-box ${query.children > 0 || errors.ages ? '' : raw('data-hidden-ages')}>${field({ name: 'ages', label: 'Возраст детей', value: (query.ages || []).join(', '), error: errors.ages, attrs: 'inputmode="numeric" autocomplete="off" placeholder="например: 4, 9"', hint: 'Через запятую, полных лет на дату заезда' })}</div>
     ${field({ name: 'promo', label: 'Промокод', value: query.promo, attrs: 'autocomplete="off" maxlength="32"' })}
     <button class="btn btn--accent btn--lg" type="submit">Найти номера</button>
   </form>`;
@@ -52,7 +53,7 @@ export function resultsPage(hotel, query, result) {
     hotel,
     body: html`${searchForm(hotel, query)}
     <ol class="progress" aria-label="Шаги бронирования"><li aria-current="step">Номер</li><li>Данные гостя</li><li>Готово</li></ol>
-    <h1 class="h2">${fmtDate(query.checkin)} — ${fmtDate(query.checkout)}, ${nightsLabel(nights)}, ${guests} ${plural(guests, 'гость', 'гостя', 'гостей')}</h1>
+    <h1 class="h2">${fmtDate(query.checkin)} — ${fmtDate(query.checkout)}, ${nightsLabel(nights)}, ${guests} ${plural(guests, 'гость', 'гостя', 'гостей')}${query.ages && query.ages.length ? ` (дети: ${query.ages.join(', ')} ${plural(query.ages[query.ages.length - 1], 'год', 'года', 'лет')})` : ''}</h1>
     ${promo ? html`<p class="flash flash--success" role="status">Промокод ${promo.code} применён: −${promo.discount_pct}% на проживание</p>` : ''}
     ${promoInvalid ? html`<p class="flash flash--error" role="status">Промокод «${query.promo}» не найден — показываем цены без скидки</p>` : ''}
     ${anyAvailable ? '' : html`<div class="empty card"><h2 class="h3">На эти даты свободных номеров нет</h2><p>Попробуйте сдвинуть даты или позвоните нам: ${hotel.phone}</p>
@@ -93,7 +94,7 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
     <div class="checkout">
       <form class="card form" method="post" action="/h/${hotel.slug}/book" novalidate data-checkout-form>
         <input type="hidden" name="checkin" value="${query.checkin}"><input type="hidden" name="checkout" value="${query.checkout}">
-        <input type="hidden" name="adults" value="${query.adults}"><input type="hidden" name="children" value="${query.children}">
+        <input type="hidden" name="adults" value="${query.adults}"><input type="hidden" name="children" value="${query.children}"><input type="hidden" name="ages" value="${(query.ages || []).join(',')}">
         <input type="hidden" name="promo" value="${query.promo}"><input type="hidden" name="room" value="${room.id}"><input type="hidden" name="rate" value="${rate.id}">
         <input type="hidden" name="idem" value="${idemKey}">
         <h2 class="h3">Кто приедет</h2>

@@ -170,14 +170,20 @@ test('reports count future bookings and payments; CSV escapes formulas', async (
 
 test('settings: tax and payment rules reach the booking engine', async () => {
   const a = await signIn('demo@stayra.example', 'demo12345');
-  await post('/app/settings/booking', a.cookie, form({ _csrf: a.csrf, min_days_ahead: 2, max_days_ahead: 200, cutoff_time: '20:00', child_max_age: 10, pay_at_hotel: 'on', prepay_pct: 0, cancel_policy: 'Отмена за 3 дня', tax_pct: '1,5', tax_min_night: 100 }));
+  await post('/app/settings/booking', a.cookie, form({ _csrf: a.csrf, min_days_ahead: 2, max_days_ahead: 200, cutoff_time: '20:00', pay_at_hotel: 'on', prepay_pct: 0, cancel_policy: 'Отмена за 3 дня', tax_pct: '1,5', tax_min_night: 100 }));
   const h = ctx.db.prepare('select * from hotels where id = 1').get();
   assert.equal(h.tax_bp, 150);
   assert.equal(h.pay_card, 0);
   const tooSoon = await fetch(`${ctx.base}/h/${h.slug}/rooms?checkin=${stay(1).checkin}&checkout=${stay(3).checkin}&adults=2`);
   assert.equal(tooSoon.status, 422);
   const page = await (await fetch(`${ctx.base}/h/${h.slug}`)).text();
-  assert.match(page, /Дети до 10 лет/);
+  assert.match(page, /Дети до 14 лет/);
+  // the oldest age group defines who counts as a child
+  const teen = ctx.db.prepare("select id from child_age_groups where hotel_id = 1 and max_age = 14").get().id;
+  await post(`/app/settings/child-groups/${teen}`, a.cookie, form({ _csrf: a.csrf, name: 'Школьники', max_age: 12, meal_pct: 100 }));
+  assert.match(await (await fetch(`${ctx.base}/h/${h.slug}`)).text(), /Дети до 12 лет/);
+  const dup = await post('/app/settings/child-groups', a.cookie, form({ _csrf: a.csrf, name: 'Ещё', max_age: 7 }));
+  assert.match(decodeURIComponent(dup.headers.get('location')), /уже есть/);
   const bad = await post('/app/settings/booking', a.cookie, form({ _csrf: a.csrf, tax_pct: '9' }));
   assert.match(bad.headers.get('location'), /e=1/);
 });

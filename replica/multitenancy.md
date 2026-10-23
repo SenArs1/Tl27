@@ -47,3 +47,7 @@ test also checks that nothing changed in A's data.
 5. **Large chains on a separate database** (same code, a different connection
    string), if the contract requires it.
 6. **Change audit**: who changed what and when (the competitors have this in the booking card).
+
+## Guests' personal data (since v4)
+
+Passport data (`booking_guests`) is stored with `hotel_id` and is only accessible within that hotel; tests check that another hotel gets 404 on the card, the form and the marks, and an empty CSV. In lists the number is masked, the edit form never sends it to the browser, and the printable form and export are served with `no-store`. For production: encrypting these columns at rest, a retention period with automatic deletion, and an access log.

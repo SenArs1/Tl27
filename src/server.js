@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { PRODUCTS, SOLUTIONS, ARTICLES } from './content.js';
 import { quote, TOOLS } from './lib/pricing.js';
 import { loadUser, requirePlatform, createSession, sessionCookie } from './lib/auth.js';
-import { parseSearch, searchOffers, createBooking, cancelBooking, validateGuest, priceStay, findPromo, ensureInventory, ratesMap, BookingError } from './lib/booking.js';
+import { parseSearch, searchOffers, createBooking, cancelBooking, validateGuest, priceStay, findPromo, ensureInventory, ratesMap, childGroups, BookingError } from './lib/booking.js';
 import { addDays, nightsOf, todayIn } from './lib/dates.js';
 import { createHotel, PROPERTY_TYPES } from './lib/hotels.js';
 import { appRouter } from './routes/app.js';
@@ -151,7 +151,7 @@ export function createApp(db, opts = {}) {
     const nights = nightsOf(s.query.checkin, s.query.checkout);
     ensureInventory(db, room, nights);
     const rows = db.prepare('select price from inventory where room_type_id = ? and date >= ? and date < ? order by date').all(room.id, s.query.checkin, s.query.checkout);
-    const price = priceStay({ nightly: rows.map((r) => r.price), rate, rates: ratesMap(db, hotel.id), room, adults: s.query.adults, children: s.query.children, promo: findPromo(db, hotel.id, s.query.promo), hotel });
+    const price = priceStay({ nightly: rows.map((r) => r.price), rate, rates: ratesMap(db, hotel.id), room, adults: s.query.adults, children: s.query.children, ages: s.query.ages, groups: childGroups(db, hotel.id), promo: findPromo(db, hotel.id, s.query.promo), hotel });
     const extras = db.prepare('select e.*, g.name as group_name from extras e left join extra_groups g on g.id = e.group_id where e.hotel_id = ? and e.active = 1 order by g.sort, e.id').all(hotel.id);
     return { query: s.query, room, rate, price, extras, nights: nights.length };
   }

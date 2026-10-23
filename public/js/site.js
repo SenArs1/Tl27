@@ -1,5 +1,6 @@
 // Progressive enhancements. Every page works without this file.
 (function () {
+  document.documentElement.classList.add('js');
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 
@@ -78,6 +79,17 @@
   // Search form: keep checkout after checkin
   const search = $('[data-search]');
   if (search) {
+    // Ages field appears only when there are children
+    const kids = $('[data-children]', search);
+    const agesBox = $('[data-ages-box]', search);
+    if (kids && agesBox) {
+      const sync = () => {
+        const n = Number(kids.value) || 0;
+        agesBox.toggleAttribute('data-hidden-ages', n === 0);
+        if (n === 0) agesBox.querySelector('input').value = '';
+      };
+      kids.addEventListener('input', sync);
+    }
     const ci = search.elements.checkin, co = search.elements.checkout;
     ci.addEventListener('change', () => {
       if (!ci.value) return;

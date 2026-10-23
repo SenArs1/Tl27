@@ -66,3 +66,25 @@ Bugs found by tests in v3 and fixed:
 | B10 | S3 | after dragging a bar edge, the click on release opened the booking card and cut off the date change | the click after an edge drag is suppressed |
 
 Tests: 35 unit/HTTP (+7 new: dates, split, rates, CTA/CTD, HTTP routes), 30 e2e + 2 deliberate skips (mouse dragging on a phone).
+
+## Version 4 (child age groups and the MVD list, 2026-10-23)
+
+| item | how it's done |
+| --- | --- |
+| Child age groups | hotel groups in "Настройки → Бронирование и оплата": "до N лет" (exclusive upper bound), "без места", meal share. The oldest group defines who counts as a child. In each rate — the price of a child of each group on an extra place / without a place; derived rates inherit them. Placement: adults → children with a place (oldest first) onto free main places → the rest onto extra places; "без места" children don't occupy a place. On the website and in manual booking — the children's ages field. Existing hotels got one group "Дети" with the old price |
+| Guest documents | "Гости и документы" section in the booking card: full name, date of birth, sex, citizenship, document (passport RF/foreign/residence permit/birth certificate…), issued, registration address, migration card and visa. Validation of RF passport and foreign-passport formats. The first guest is prefilled from the booking name |
+| Personal data | in the card and lists the number is masked (`4011 ••••33`); the edit form doesn't send the number to the browser (empty = don't change); the printable form and CSV are full, `Cache-Control: no-store`; data from other hotels is not available (tests) |
+| MVD list | "Отчёты → Учёт гостей (МВД)": guests by arrival date, deadline (RF citizens — next day, foreigners — next working day; public holidays not counted, a note to check your region's rules), status "не отправлено / отправлено / не требуется", bulk marking, filters, CSV for upload, list of bookings without complete guest data. On the dashboard: "документы не внесены" and "не отправлены в МВД" |
+| Registration form | printable A4 page: guest details, document, dates and room, consent to personal data processing, signature lines |
+
+Not done deliberately: automatic submission to MVD. It needs a connection to government systems (Gosuslugi / MVD services) with the hotel's own access — a separate integration project.
+
+Bugs found by tests in v4 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B11 | S2 | the full passport number reached the card page code through the edit form | the number isn't pre-filled; an empty field keeps the stored one |
+| B12 | S3 | text on an unavailable room card failed the contrast check (the whole card was faded) | only the picture is faded |
+| B13 | S3 | the reports page didn't show messages after an action | `msg` passed into the reports page |
+
+Tests: 41 unit/HTTP (+6: ages, placement, child prices, documents, deadlines, MVD and isolation), 36 e2e + 2 deliberate skips.

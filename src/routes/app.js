@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { tx, findFreeRoom } from '../db.js';
 import { requireUser, requireOwner, checkCsrf, verifyPassword, hashPassword, createSession, sessionCookie, clearCookie, userHotels } from '../lib/auth.js';
-import { parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, moveSegment, splitStay, changeDates, segmentsOf, addPayment, validateGuest, ensureInventory, logToChannels, BookingError, ACTIVE } from '../lib/booking.js';
+import { childGroups, parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, moveSegment, splitStay, changeDates, segmentsOf, addPayment, validateGuest, ensureInventory, logToChannels, ratesMap, BookingError, ACTIVE } from '../lib/booking.js';
 import { addDays, diffDays, isIsoDate, isWeekend, nightsOf, todayIn, monthBounds } from '../lib/dates.js';
 import { createHotel, addPhysicalRooms, recountRooms, PROPERTY_TYPES } from '../lib/hotels.js';
 import { scope, BOOKING_LIST } from '../lib/scope.js';
@@ -11,6 +11,8 @@ import { chessPage, SORTS } from '../views/chess.js';
 import { roomsPage } from '../views/rooms.js';
 import * as S from '../views/settings.js';
 import { reportsPage } from '../views/reports.js';
+import { guestsSection, registrationCard } from '../views/guests.js';
+import { validateGuestDoc, mvdDeadline, splitName, isForeign } from '../lib/guests.js';
 import { DEMO } from '../seed.js';
 
 const int = (v, d = 0) => {
@@ -123,8 +125,13 @@ export function appRouter(db, { showDemo }) {
     const unassigned = db.prepare(`select count(distinct s.booking_id) n from stay_segments s join bookings b on b.id = s.booking_id
       where s.hotel_id = ? and s.room_id is null and b.status in ('confirmed','checked_in') and s.end > ?`).get(hid, t).n;
     const dirty = db.prepare("select count(*) n from rooms where hotel_id = ? and active = 1 and status = 'dirty'").get(hid).n;
+    // Guests in house or already gone whose data has not been passed to the migration service.
+    const mvdPending = db.prepare(`select count(*) n from booking_guests g join bookings b on b.id = g.booking_id
+      where g.hotel_id = ? and g.mvd_status = 'new' and b.status in ('checked_in','checked_out')`).get(hid).n;
+    const mvdMissing = db.prepare(`select coalesce(sum(b.adults + b.children - (select count(*) from booking_guests g where g.booking_id = b.id)), 0) n
+      from bookings b where b.hotel_id = ? and b.status = 'checked_in' and (select count(*) from booking_guests g where g.booking_id = b.id) < b.adults + b.children`).get(hid).n;
     res.send(A.dashboardPage({
-      req, hotel: req.hotelRow, msg: req.msg, arrivals, departures, inhouse, forecast, unassigned, dirty, debtors: debtRow.n, channels: req.s.channels(),
+      req, hotel: req.hotelRow, msg: req.msg, arrivals, departures, inhouse, forecast, unassigned, dirty, mvdPending, mvdMissing, debtors: debtRow.n, channels: req.s.channels(),
       sources: src.map((x) => ({ ...x, pct: totalN ? Math.round((x.n / totalN) * 100) : 0 })),
       s: { rooms, occupied, occupancy: rooms ? Math.round((occupied / rooms) * 100) : 0, monthRevenue: occ.totals.revenue, adr: occ.totals.adr, revpar: occ.totals.revpar, debt: debtRow.s, cancelled30 },
     }));
@@ -221,12 +228,7 @@ export function appRouter(db, { showDemo }) {
   r.get('/bookings/:id', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
-    res.send(A.bookingDetailPage({
-      req, hotel: req.hotelRow, b, room: db.prepare('select * from room_types where id = ?').get(b.room_type_id),
-      rate: db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id),
-      segments: db.prepare('select s.*, r.number, t.name as type_name from stay_segments s left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start').all(b.id),
-      rooms: req.s.rooms(), payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id), channels: req.s.channels(), msg: req.msg,
-    }));
+    res.send(bookingPage(req, b));
   });
   const TRANSITIONS = { confirmed: ['checked_in', 'no_show', 'cancelled'], checked_in: ['checked_out'] };
   r.post('/bookings/:id/status', (req, res, next) => {
@@ -244,7 +246,9 @@ export function appRouter(db, { showDemo }) {
       const last = segs[segs.length - 1];
       if (to === 'checked_out' && last && last.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(last.room_id);
     }
-    back(res, ret, { checked_in: `${b.guest_name} заселён`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to]);
+    const docs = db.prepare('select count(*) n from booking_guests where booking_id = ?').get(b.id).n;
+    const docsNote = to === 'checked_in' && docs < b.adults + b.children ? '. Внесите документы гостей для МВД' : '';
+    back(res, ret + (docsNote && ret !== '/app' ? '#guests' : ''), { checked_in: `${b.guest_name} заселён${docsNote}`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to]);
   });
   // Shared reply for the chessboard (JSON) and the booking card (form + redirect).
   const reply = (req, res, b, fn, okText) => {
@@ -280,6 +284,76 @@ export function appRouter(db, { showDemo }) {
     reply(req, res, b, () => changeDates(db, req.hotelRow, b, checkin, checkout),
       (nb) => `Даты изменены: ${nb.checkin.split('-').reverse().join('.')} — ${nb.checkout.split('-').reverse().join('.')}, сумма ${nb.total.toLocaleString('ru-RU')} ₽`);
   });
+  // ---------- guests & documents (MVD) ----------
+  const guestsOf = (b) => db.prepare('select * from booking_guests where booking_id = ? order by id').all(b.id);
+  const guestsBlock = (req, b, extra = {}) => {
+    const guests = guestsOf(b);
+    const values = extra.values || (guests.length ? {} : splitName(b.guest_name));
+    return guestsSection({ req, b, guests, today: req.today, values, ...extra });
+  };
+  const bookingPage = (req, b, extra) => A.bookingDetailPage({
+    req, hotel: req.hotelRow, b, room: db.prepare('select * from room_types where id = ?').get(b.room_type_id),
+    rate: db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id),
+    segments: db.prepare('select s.*, r.number, t.name as type_name from stay_segments s left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start').all(b.id),
+    rooms: req.s.rooms(), payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id), channels: req.s.channels(), msg: req.msg,
+    guests: guestsBlock(req, b, extra),
+  });
+  const ownGuest = (req, b) => db.prepare('select * from booking_guests where id = ? and booking_id = ? and hotel_id = ?').get(int(req.params.gid), b.id, req.user.hotel_id);
+  const GUEST_COLS = ['last_name', 'first_name', 'middle_name', 'birth_date', 'sex', 'citizenship', 'doc_type', 'doc_series', 'doc_number', 'doc_issued_at', 'doc_issued_by', 'doc_code', 'reg_address', 'migration_card', 'visa'];
+  r.post('/bookings/:id/guests', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const v = validateGuestDoc(req.body, { checkin: b.checkin });
+    if (!v.ok) return res.status(422).send(bookingPage(req, b, { values: req.body, errors: v.errors, open: true }));
+    db.prepare(`insert into booking_guests (booking_id, hotel_id, ${GUEST_COLS.join(', ')}) values (?, ?, ${GUEST_COLS.map(() => '?').join(', ')})`)
+      .run(b.id, req.user.hotel_id, ...GUEST_COLS.map((k) => v.guest[k]));
+    back(res, `/app/bookings/${b.id}#guests`, `${v.guest.last_name} ${v.guest.first_name} добавлен(а)`);
+  });
+  r.post('/bookings/:id/guests/:gid', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    const g = b && ownGuest(req, b);
+    if (!g) return next();
+    // The number is never sent back to the browser; an empty field keeps the stored one.
+    const body = { ...req.body, doc_number: String(req.body.doc_number || '').trim() || g.doc_number };
+    const v = validateGuestDoc(body, { checkin: b.checkin });
+    if (!v.ok) return back(res, `/app/bookings/${b.id}#guests`, Object.values(v.errors)[0], true);
+    db.prepare(`update booking_guests set ${GUEST_COLS.map((k) => `${k} = ?`).join(', ')} where id = ?`).run(...GUEST_COLS.map((k) => v.guest[k]), g.id);
+    back(res, `/app/bookings/${b.id}#guests`, 'Данные гостя сохранены');
+  });
+  r.post('/bookings/:id/guests/:gid/delete', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    const g = b && ownGuest(req, b);
+    if (!g) return next();
+    db.prepare('delete from booking_guests where id = ?').run(g.id);
+    back(res, `/app/bookings/${b.id}#guests`, 'Данные гостя удалены');
+  });
+  r.post('/bookings/:id/guests/:gid/mvd', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    const g = b && ownGuest(req, b);
+    if (!g) return next();
+    const status = ['new', 'sent', 'not_required'].includes(req.body.status) ? req.body.status : 'sent';
+    db.prepare("update booking_guests set mvd_status = ?, mvd_sent_at = case when ? = 'sent' then datetime('now') else null end where id = ?").run(status, status, g.id);
+    back(res, `/app/bookings/${b.id}#guests`, status === 'sent' ? 'Отмечено: сведения переданы в МВД' : 'Отметка снята');
+  });
+  r.get('/bookings/:id/guests/:gid/card', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    const g = b && ownGuest(req, b);
+    if (!g) return next();
+    const rooms = db.prepare('select group_concat(r.number, \' → \') n from (select r.number from stay_segments s join rooms r on r.id = s.room_id where s.booking_id = ? order by s.start) r').get(b.id).n;
+    res.set('Cache-Control', 'no-store');
+    res.send(registrationCard({ hotel: req.hotelRow, b, g, rooms }));
+  });
+  r.post('/reports/mvd/mark', (req, res) => {
+    const ids = arr(req.body.ids).map((x) => int(x)).filter(Boolean);
+    const status = req.body.status === 'not_required' ? 'not_required' : 'sent';
+    const backTo = String(req.body.back || '').startsWith('/app/reports') ? req.body.back : '/app/reports?tab=mvd';
+    if (!ids.length) return back(res, backTo, 'Отметьте гостей в списке', true);
+    const upd = db.prepare("update booking_guests set mvd_status = ?, mvd_sent_at = case when ? = 'sent' then datetime('now') else null end where id = ? and hotel_id = ? and mvd_status = 'new'");
+    let n = 0;
+    tx(db, () => { for (const id of ids) n += upd.run(status, status, id, req.user.hotel_id).changes; });
+    back(res, backTo, `Отмечено гостей: ${n}`);
+  });
+
   r.post('/bookings/:id/pay', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
@@ -360,7 +434,8 @@ export function appRouter(db, { showDemo }) {
   // ---------- rooms, stock, rates, extras, promos ----------
   r.get('/rooms', (req, res) => {
     res.send(roomsPage({
-      req, hotel: req.hotelRow, msg: req.msg, types: req.s.types(), rooms: req.s.rooms(), rates: req.s.rates(),
+      req, hotel: req.hotelRow, msg: req.msg, types: req.s.types(), rooms: req.s.rooms(), rates: [...ratesMap(db, req.user.hotel_id).values()].sort((x, y) => x.id - y.id),
+      ageGroups: childGroups(db, req.user.hotel_id),
       groups: req.s.groups(), extras: req.s.extras(), promos: req.s.promos(),
     }));
   });
@@ -446,12 +521,21 @@ export function appRouter(db, { showDemo }) {
   };
   const RATE_COLS = 'name=?, description=?, meal=?, meal_price=?, refundable=?, extra_adult_price=?, extra_child_price=?, parent_id=?, adjust_type=?, adjust_value=?, rounding=?, single_discount=?, discount_pct=0';
   const rateVals = (t) => [t.name, t.description, t.meal, t.meal_price, t.refundable, t.extra_adult_price, t.extra_child_price, t.parent_id, t.adjust_type, t.adjust_value, t.rounding, t.single_discount];
+  // Child prices per age group: field child_<groupId>; empty means "use the default".
+  const saveChildPrices = (req, rateId) => {
+    for (const g of childGroups(db, req.user.hotel_id)) {
+      const v = req.body[`child_${g.id}`];
+      if (v === undefined || v === '') db.prepare('delete from rate_child_prices where rate_id = ? and group_id = ?').run(rateId, g.id);
+      else db.prepare('insert or replace into rate_child_prices (rate_id, group_id, price) values (?,?,?)').run(rateId, g.id, Math.max(0, int(v)));
+    }
+  };
   r.post('/rooms/rates', (req, res) => {
     const t = rateInput(req.body);
     const err = rateError(req, t);
     if (err) return back(res, '/app/rooms#rates', err, true);
     const id = db.prepare('insert into rate_plans (hotel_id, name) values (?, ?)').run(req.user.hotel_id, t.name).lastInsertRowid;
     db.prepare(`update rate_plans set ${RATE_COLS} where id = ?`).run(...rateVals(t), id);
+    saveChildPrices(req, Number(id));
     back(res, '/app/rooms#rates', `Тариф «${t.name}» добавлен`);
   });
   r.post('/rooms/rates/:id', (req, res, next) => {
@@ -461,6 +545,7 @@ export function appRouter(db, { showDemo }) {
     const err = rateError(req, t, old.id);
     if (err) return back(res, '/app/rooms#rates', err, true);
     db.prepare(`update rate_plans set ${RATE_COLS}, active = ? where id = ?`).run(...rateVals(t), t.active, old.id);
+    saveChildPrices(req, old.id);
     back(res, '/app/rooms#rates', 'Сохранено');
   });
   r.post('/rooms/groups', (req, res) => {
@@ -573,10 +658,10 @@ export function appRouter(db, { showDemo }) {
 
   // ---------- reports ----------
   r.get('/reports', (req, res) => {
-    const tab = ['occupancy', 'sales', 'lists', 'tax'].includes(req.query.tab) ? req.query.tab : 'occupancy';
+    const tab = ['occupancy', 'sales', 'lists', 'tax', 'mvd'].includes(req.query.tab) ? req.query.tab : 'occupancy';
     const [mFrom, mTo] = monthBounds(req.today);
-    let from = isIsoDate(req.query.from) ? req.query.from : tab === 'lists' ? req.today : mFrom;
-    let to = isIsoDate(req.query.to) ? req.query.to : mTo;
+    let from = isIsoDate(req.query.from) ? req.query.from : tab === 'lists' ? req.today : tab === 'mvd' ? addDays(req.today, -7) : mFrom;
+    let to = isIsoDate(req.query.to) ? req.query.to : tab === 'mvd' ? req.today : mTo;
     if (to < from) to = from;
     if (diffDays(from, to) > 366) to = addDays(from, 366);
     const hid = req.user.hotel_id;
@@ -592,9 +677,34 @@ export function appRouter(db, { showDemo }) {
     } else if (tab === 'tax') {
       const rows = db.prepare(`select * from bookings where hotel_id = ? and status in ${ACTIVE} and checkout >= ? and checkout <= ? order by checkout`).all(hid, from, to);
       data = { rows, totals: { tax: rows.reduce((s, b) => s + b.tax_total, 0), base: rows.reduce((s, b) => s + b.nights_total, 0) } };
+    } else if (tab === 'mvd') {
+      const status = ['new', 'sent', 'not_required'].includes(req.query.status) ? req.query.status : '';
+      const who = ['rus', 'foreign'].includes(req.query.who) ? req.query.who : '';
+      let rows = db.prepare(`select g.*, b.checkin, b.checkout, b.code,
+          (select group_concat(number, ' → ') from (select r.number from stay_segments s join rooms r on r.id = s.room_id where s.booking_id = b.id order by s.start)) as room_number
+        from booking_guests g join bookings b on b.id = g.booking_id
+        where g.hotel_id = ? and b.status in ${ACTIVE} and b.checkin >= ? and b.checkin <= ? order by b.checkin, g.last_name`).all(hid, from, to)
+        .map((g) => ({ ...g, deadline: mvdDeadline(g, g.checkin) }));
+      if (status) rows = rows.filter((g) => g.mvd_status === status);
+      if (who) rows = rows.filter((g) => (who === 'foreign') === isForeign(g));
+      const missingBookings = db.prepare(`select b.*, (select count(*) from booking_guests g where g.booking_id = b.id) have from bookings b
+        where b.hotel_id = ? and b.status in ${ACTIVE} and b.checkin >= ? and b.checkin <= ? and b.checkin <= ?
+        and (select count(*) from booking_guests g where g.booking_id = b.id) < b.adults + b.children order by b.checkin`).all(hid, from, to, req.today);
+      data = {
+        rows, status, who, today: req.today, missingBookings,
+        totals: {
+          pending: rows.filter((g) => g.mvd_status === 'new').length,
+          late: rows.filter((g) => g.mvd_status === 'new' && g.deadline < req.today).length,
+          foreign: rows.filter(isForeign).length,
+          missing: missingBookings.reduce((x, b) => x + b.adults + b.children - b.have, 0),
+        },
+      };
     } else data = occupancyReport(db, hid, from, to);
-    if (req.query.format === 'csv') return sendCsv(res, `report-${tab}-${from}.csv`, csvFor(tab, data));
-    res.send(reportsPage({ req, hotel: req.hotelRow, tab, from, to, data, channels: req.s.channels() }));
+    if (req.query.format === 'csv') {
+      if (tab === 'mvd') res.set('Cache-Control', 'no-store');
+      return sendCsv(res, `report-${tab}-${from}.csv`, csvFor(tab, data));
+    }
+    res.send(reportsPage({ req, hotel: req.hotelRow, tab, from, to, data, channels: req.s.channels(), msg: req.msg }));
   });
 
   // ---------- settings ----------
@@ -614,16 +724,51 @@ export function appRouter(db, { showDemo }) {
     );
     back(res, '/app/settings', 'Настройки сохранены');
   });
-  r.get('/settings/booking', (req, res) => res.send(S.settingsBooking({ req, hotel: req.hotelRow, msg: req.msg })));
+  r.get('/settings/booking', (req, res) => res.send(S.settingsBooking({ req, hotel: req.hotelRow, msg: req.msg, groups: childGroups(db, req.user.hotel_id) })));
+  // Age groups. hotel.child_max_age follows the oldest group: older guests are adults.
+  const syncChildAge = (hid) => db.prepare('update hotels set child_max_age = (select max(max_age) from child_age_groups where hotel_id = ?) where id = ?').run(hid, hid);
+  const groupInput = (b) => ({ name: str(b.name, 40), max_age: int(b.max_age), meal_pct: Math.min(100, Math.max(0, int(b.meal_pct, 100))), no_bed: b.no_bed === 'on' ? 1 : 0 });
+  const groupError = (g, selfId = 0, hid) => {
+    if (g.name.length < 2) return 'Укажите название группы';
+    if (g.max_age < 1 || g.max_age > 18) return 'Возраст «до» — от 1 до 18 лет';
+    if (db.prepare('select 1 from child_age_groups where hotel_id = ? and max_age = ? and id != ?').get(hid, g.max_age, selfId)) return `Группа «до ${g.max_age} лет» уже есть`;
+    return null;
+  };
+  r.post('/settings/child-groups', requireOwner, (req, res) => {
+    const g = groupInput(req.body);
+    const err = groupError(g, 0, req.user.hotel_id);
+    if (err) return back(res, '/app/settings/booking#ages', err, true);
+    db.prepare('insert into child_age_groups (hotel_id, name, max_age, meal_pct, no_bed) values (?,?,?,?,?)').run(req.user.hotel_id, g.name, g.max_age, g.meal_pct, g.no_bed);
+    syncChildAge(req.user.hotel_id);
+    back(res, '/app/settings/booking#ages', `Группа «${g.name}» добавлена. Задайте её цены в тарифах.`);
+  });
+  r.post('/settings/child-groups/:id', requireOwner, (req, res, next) => {
+    const old = db.prepare('select * from child_age_groups where id = ? and hotel_id = ?').get(int(req.params.id), req.user.hotel_id);
+    if (!old) return next();
+    const g = groupInput(req.body);
+    const err = groupError(g, old.id, req.user.hotel_id);
+    if (err) return back(res, '/app/settings/booking#ages', err, true);
+    db.prepare('update child_age_groups set name = ?, max_age = ?, meal_pct = ?, no_bed = ? where id = ?').run(g.name, g.max_age, g.meal_pct, g.no_bed, old.id);
+    syncChildAge(req.user.hotel_id);
+    back(res, '/app/settings/booking#ages', 'Группа сохранена');
+  });
+  r.post('/settings/child-groups/:id/delete', requireOwner, (req, res, next) => {
+    const old = db.prepare('select * from child_age_groups where id = ? and hotel_id = ?').get(int(req.params.id), req.user.hotel_id);
+    if (!old) return next();
+    if (childGroups(db, req.user.hotel_id).length < 2) return back(res, '/app/settings/booking#ages', 'Должна остаться хотя бы одна группа', true);
+    db.prepare('delete from child_age_groups where id = ?').run(old.id);
+    syncChildAge(req.user.hotel_id);
+    back(res, '/app/settings/booking#ages', `Группа «${old.name}» удалена`);
+  });
   r.post('/settings/booking', requireOwner, (req, res) => {
     const b = req.body;
     const taxPct = Number.parseFloat(String(b.tax_pct || '0').replace(',', '.'));
     if (!Number.isFinite(taxPct) || taxPct < 0 || taxPct > 5) return back(res, '/app/settings/booking', 'Ставка налога от 0 до 5%', true);
     if (b.pay_at_hotel !== 'on' && b.pay_card !== 'on') return back(res, '/app/settings/booking', 'Оставьте хотя бы один способ оплаты', true);
-    db.prepare(`update hotels set min_days_ahead=?, max_days_ahead=?, cutoff_time=?, child_max_age=?, pay_at_hotel=?, pay_card=?, prepay_pct=?, cancel_policy=?,
+    db.prepare(`update hotels set min_days_ahead=?, max_days_ahead=?, cutoff_time=?, pay_at_hotel=?, pay_card=?, prepay_pct=?, cancel_policy=?,
       tax_bp=?, tax_min_night=? where id = ?`).run(
       Math.min(60, Math.max(0, int(b.min_days_ahead))), Math.min(730, Math.max(1, int(b.max_days_ahead, 365))),
-      /^([01]\d|2[0-3]):[0-5]\d$/.test(b.cutoff_time || '') ? b.cutoff_time : '23:59', Math.min(17, Math.max(0, int(b.child_max_age, 12))),
+      /^([01]\d|2[0-3]):[0-5]\d$/.test(b.cutoff_time || '') ? b.cutoff_time : '23:59',
       b.pay_at_hotel === 'on' ? 1 : 0, b.pay_card === 'on' ? 1 : 0, Math.min(100, Math.max(0, int(b.prepay_pct))), str(b.cancel_policy, 1000),
       Math.round(taxPct * 100), Math.max(0, int(b.tax_min_night)), req.user.hotel_id,
     );
@@ -745,6 +890,10 @@ export function salesReport(db, hotelId, from, to) {
 function csvFor(tab, d) {
   if (tab === 'sales') return [['Источник', 'Броней', 'Отмен', 'Сумма'], ...d.bySource.map((x) => [x.source, x.n, x.cancelled, x.sum])];
   if (tab === 'lists') return [['Тип', 'Номер', 'Гость', 'Телефон', 'Заезд', 'Выезд', 'Долг'], ...['arrivals', 'departures', 'inhouse'].flatMap((k) => d[k].map((b) => [k, b.room_number || '', b.guest_name, b.guest_phone, b.checkin, b.checkout, b.total - b.paid_amount]))];
+  if (tab === 'mvd') {
+    return [['Фамилия', 'Имя', 'Отчество', 'Дата рождения', 'Пол', 'Гражданство', 'Документ', 'Серия', 'Номер', 'Дата выдачи', 'Кем выдан', 'Код подразделения', 'Адрес регистрации', 'Миграционная карта', 'Виза', 'Номер', 'Заезд', 'Выезд', 'Бронь', 'Срок', 'Статус'],
+      ...d.rows.map((g) => [g.last_name, g.first_name, g.middle_name, g.birth_date, g.sex, g.citizenship, g.doc_type, g.doc_series, g.doc_number, g.doc_issued_at, g.doc_issued_by, g.doc_code, g.reg_address, g.migration_card, g.visa, g.room_number || '', g.checkin, g.checkout, g.code, g.deadline, g.mvd_status])];
+  }
   if (tab === 'tax') return [['Бронь', 'Гость', 'Выезд', 'Проживание', 'Налог'], ...d.rows.map((b) => [b.code, b.guest_name, b.checkout, b.nights_total, b.tax_total])];
   return [['Дата', 'Продано', 'Доступно', 'Загрузка %', 'Заезды', 'Выезды', 'Доход'], ...d.byDay.map((r) => [r.date, r.sold, r.available, r.occupancy, r.arrivals, r.departures, r.revenue])];
 }

@@ -63,7 +63,7 @@ function spark(points, max) {
   </div>`;
 }
 
-export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhouse, forecast, sources, unassigned, dirty, debtors, channels }) {
+export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhouse, forecast, sources, unassigned, dirty, debtors, channels, mvdPending = 0, mvdMissing = 0 }) {
   const empty = s.rooms === 0;
   return appLayout({
     title: 'Сводка',
@@ -80,7 +80,9 @@ export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhous
       <div class="stat-tile"><span>Доход за месяц (ADR / RevPAR)</span><strong>${rub(s.monthRevenue)}</strong><small>${rub(s.adr)} / ${rub(s.revpar)}</small></div>
       <div class="stat-tile"><span>Ждут оплаты</span><strong>${rub(s.debt)}</strong><small>${debtors} ${debtors === 1 ? 'бронь' : 'броней'} заезжают в ближайшие 7 дней</small></div>
     </div>
-    ${unassigned || dirty ? html`<div class="alerts">
+    ${unassigned || dirty || mvdPending || mvdMissing ? html`<div class="alerts">
+      ${mvdMissing ? html`<a class="alert" href="/app/reports?tab=mvd">🪪 У ${mvdMissing} проживающих гостей не внесены документы</a>` : ''}
+      ${mvdPending ? html`<a class="alert" href="/app/reports?tab=mvd&status=new">📨 ${mvdPending} гостей не отправлены в МВД</a>` : ''}
       ${unassigned ? html`<a class="alert" href="/app/chess">⚠ ${unassigned} бронь(и) без номера — распределите на шахматке</a>` : ''}
       ${dirty ? html`<a class="alert" href="/app/rooms#stock">🧹 ${dirty} номер(ов) ждут уборки</a>` : ''}
     </div>` : ''}
@@ -156,6 +158,7 @@ export function newBookingPage({ req, hotel, types, rooms, rates, extras, values
       ${field({ prefix: 'nb', name: 'checkout', label: 'Выезд', type: 'date', value: v.checkout, error: errors.checkout, attrs: 'required' })}
       ${field({ prefix: 'nb', name: 'adults', label: 'Взрослые', type: 'number', value: v.adults ?? 2, error: errors.adults, attrs: 'min="1" max="12"' })}
       ${field({ prefix: 'nb', name: 'children', label: 'Дети', type: 'number', value: v.children ?? 0, error: errors.children, attrs: 'min="0" max="8"' })}
+      ${field({ prefix: 'nb', name: 'ages', label: 'Возраст детей', value: Array.isArray(v.ages) ? v.ages.join(', ') : v.ages, error: errors.ages, attrs: 'inputmode="numeric" placeholder="4, 9"', hint: 'Через запятую, если есть дети' })}
       ${field({ prefix: 'nb', name: 'type', label: 'Категория', type: 'select', value: v.type, options: types.map((t) => [t.id, `${t.name} (до ${t.capacity}${t.extra_beds ? ` + ${t.extra_beds} доп.` : ''})`]) })}
       ${field({ prefix: 'nb', name: 'room', label: 'Номер', type: 'select', value: v.room || '', options: [['', 'Подобрать свободный автоматически'], ...rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`])], hint: 'Номер должен относиться к выбранной категории' })}
       ${field({ prefix: 'nb', name: 'rate', label: 'Тариф', type: 'select', value: v.rate, options: rates.map((r) => [r.id, r.name]) })}
@@ -171,7 +174,7 @@ export function newBookingPage({ req, hotel, types, rooms, rates, extras, values
   });
 }
 
-export function bookingDetailPage({ req, hotel, b, room, rate, segments, rooms, payments, channels, msg }) {
+export function bookingDetailPage({ req, hotel, b, room, rate, segments, rooms, payments, channels, msg, guests = '' }) {
   const extras = JSON.parse(b.extras || '[]');
   const next = { confirmed: [['checked_in', 'Заселить'], ['no_show', 'Незаезд'], ['cancelled', 'Отменить бронь']], checked_in: [['checked_out', 'Выселить']] }[b.status] || [];
   const debt = b.total - b.paid_amount;
@@ -192,7 +195,7 @@ export function bookingDetailPage({ req, hotel, b, room, rate, segments, rooms, 
           <dt>Номер</dt><dd>${segments.map((sg, i) => html`${i ? ' → ' : ''}${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">не назначен</span>`}`)}</dd>
           <dt>Тариф</dt><dd>${rate.name}</dd>
           <dt>Даты</dt><dd>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))}</dd>
-          <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
+          <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.${JSON.parse(b.children_ages || '[]').length ? ` (${JSON.parse(b.children_ages).join(', ')} лет)` : ''}` : ''}</dd>
           <dt>Пожелания</dt><dd>${b.comment || '—'}</dd>
           <dt>Источник</dt><dd>${sourceName(b.source, channels)}${b.channel_ref ? ` (${b.channel_ref})` : ''}</dd>
           <dt>Создана</dt><dd>${b.created_at} UTC</dd>
@@ -231,9 +234,11 @@ export function bookingDetailPage({ req, hotel, b, room, rate, segments, rooms, 
           ${field({ prefix: 'pay', name: 'method', label: 'Способ', type: 'select', value: 'card', options: PAY_METHODS.filter((m) => m[0] !== 'online') })}
           <button class="btn btn--primary" type="submit">Принять оплату</button></form>` : ''}
       </section>
-    </div>`,
+    </div>
+    ${guests}`,
   });
 }
+
 export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
   const prev = dates.length ? dates[0] : from;
   return appLayout({

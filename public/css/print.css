@@ -1,0 +1,13 @@
+/* Registration card: A4, black on white */
+body.regcard { font-family: "Manrope", system-ui, sans-serif; color: #111; background: #fff; margin: 0; }
+.regcard main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+.regcard header { display: flex; justify-content: space-between; gap: 16px; border-bottom: 2px solid #111; padding-bottom: 8px; font-size: 14px; flex-wrap: wrap; }
+.regcard h1 { font-size: 24px; margin: 20px 0 12px; }
+.regcard table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.regcard th, .regcard td { text-align: left; padding: 8px 10px; border: 1px solid #999; vertical-align: top; }
+.regcard th { width: 36%; font-weight: 600; background: #f3f3f3; }
+.regcard .consent { font-size: 13px; margin-top: 20px; }
+.regcard .sign { margin-top: 40px; }
+.regcard footer { margin-top: 32px; font-size: 11px; color: #555; }
+.regcard .noprint button { font: inherit; padding: 8px 16px; }
+@media print { .noprint { display: none; } .regcard main { padding: 0; } @page { size: A4; margin: 15mm; } }

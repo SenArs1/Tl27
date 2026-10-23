@@ -48,7 +48,7 @@ export function settingsObject({ req, hotel, msg }) {
   </form>`);
 }
 
-export function settingsBooking({ req, hotel, msg }) {
+export function settingsBooking({ req, hotel, msg, groups = [] }) {
   const ro = req.user.role !== 'owner';
   const pct = (bp) => (bp / 100).toString().replace('.', ',');
   return page(req, hotel, msg, 'Бронирование и оплата', html`<form class="card form form--grid" method="post" action="/app/settings/booking">${csrf(req)}
@@ -57,7 +57,6 @@ export function settingsBooking({ req, hotel, msg }) {
     ${field({ prefix: 'sb', name: 'min_days_ahead', label: 'Бронировать не позже чем за, дней', type: 'number', value: hotel.min_days_ahead, attrs: 'min="0" max="60"', hint: '0 — можно бронировать в день заезда' })}
     ${field({ prefix: 'sb', name: 'max_days_ahead', label: 'Открыто дней вперёд', type: 'number', value: hotel.max_days_ahead, attrs: 'min="1" max="730"' })}
     ${field({ prefix: 'sb', name: 'cutoff_time', label: 'Брони на сегодня принимать до', type: 'time', value: hotel.cutoff_time })}
-    ${field({ prefix: 'sb', name: 'child_max_age', label: 'Ребёнок — это гость до, лет', type: 'number', value: hotel.child_max_age, attrs: 'min="0" max="17"', hint: 'Старше — считается взрослым' })}
     <h2 class="h3 span-all">Оплата</h2>
     <label class="check"><input type="checkbox" name="pay_at_hotel" ${hotel.pay_at_hotel ? raw('checked') : ''}><span>Оплата при заселении</span></label>
     <label class="check"><input type="checkbox" name="pay_card" ${hotel.pay_card ? raw('checked') : ''}><span>Онлайн-оплата картой (сейчас тестовый режим)</span></label>
@@ -68,7 +67,25 @@ export function settingsBooking({ req, hotel, msg }) {
     ${field({ prefix: 'sb', name: 'tax_pct', label: 'Ставка, %', value: pct(hotel.tax_bp), attrs: 'inputmode="decimal" pattern="[0-9]+([.,][0-9]{1,2})?"', hint: '0 — налог не взимается' })}
     ${field({ prefix: 'sb', name: 'tax_min_night', label: 'Минимум за сутки, ₽', type: 'number', value: hotel.tax_min_night, attrs: 'min="0"' })}
     ${ro ? '' : html`<div class="actions span-all"><button class="btn btn--primary" type="submit">Сохранить</button></div>`}
-  </form>`);
+  </form>
+  <section class="card" id="ages"><h2 class="h3">Детские возрастные группы</h2>
+    <p class="muted">Ребёнок попадает в первую группу, где «до … лет» больше его возраста: группа «до 3 лет» — это 0, 1 и 2 года. Гости старше последней группы (сейчас ${hotel.child_max_age} лет и старше) считаются взрослыми. «Без места» — ребёнок не занимает кровать (спит с родителями или в детской кроватке). Цены детей по группам задаются в каждом тарифе.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Возрастные группы"><table class="table"><thead><tr><th scope="col">Группа</th><th scope="col">Возраст</th><th scope="col">Место</th><th scope="col">Питание</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
+      <tbody>${groups.map((g, i) => html`<tr><td>${g.name}</td><td>${i ? groups[i - 1].max_age : 0}–${g.max_age - 1} лет</td><td>${g.no_bed ? 'без места' : 'основное или доп. место'}</td><td>${g.meal_pct}% от взрослого</td>
+        <td>${ro ? '' : html`<details class="row-edit"><summary>Изменить</summary>${groupForm(req, g, `/app/settings/child-groups/${g.id}`)}</details>
+          ${groups.length > 1 ? html`<form method="post" action="/app/settings/child-groups/${g.id}/delete" data-confirm="Удалить группу «${g.name}»? Цены этой группы в тарифах тоже удалятся.">${csrf(req)}<button class="linklike" type="submit">Удалить</button></form>` : ''}`}</td></tr>`)}</tbody></table></div>
+    ${ro ? '' : html`<details class="add"><summary class="btn btn--secondary">Добавить группу</summary>${groupForm(req, {}, '/app/settings/child-groups')}</details>`}
+  </section>`);
+}
+
+function groupForm(req, g, action) {
+  const pfx = action.replace(/\W+/g, '-').replace(/^-/, '');
+  return html`<form class="form form--grid" method="post" action="${action}">${csrf(req)}
+    ${field({ prefix: pfx, name: 'name', label: 'Название', value: g.name, attrs: 'required maxlength="40" placeholder="Например, Малыши"' })}
+    ${field({ prefix: pfx, name: 'max_age', label: 'До, лет (не включая)', type: 'number', value: g.max_age, attrs: 'required min="1" max="18"' })}
+    ${field({ prefix: pfx, name: 'meal_pct', label: 'Питание, % от взрослого', type: 'number', value: g.meal_pct ?? 100, attrs: 'min="0" max="100"' })}
+    <label class="check"><input type="checkbox" name="no_bed" ${g.no_bed ? raw('checked') : ''}><span>Без места</span></label>
+    <div class="actions"><button class="btn btn--primary" type="submit">Сохранить</button><a class="btn btn--ghost" href="/app/settings/booking#ages" data-close-details>Отмена</a></div></form>`;
 }
 
 export function settingsTeam({ req, hotel, users, msg, created }) {

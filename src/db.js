@@ -83,6 +83,52 @@ create table if not exists stay_segments (
 );
 create index if not exists segments_booking on stay_segments(booking_id, start);
 create index if not exists segments_room on stay_segments(room_id, start);
+-- Child age groups of a hotel. A child belongs to the first group whose max_age is
+-- above the child's age (max_age is exclusive: "до 3 лет" = 0, 1, 2).
+-- no_bed: the child does not take a place (sleeps with parents or in a cot).
+create table if not exists child_age_groups (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  name text not null,
+  max_age integer not null check (max_age between 1 and 18),
+  no_bed integer not null default 0,
+  meal_pct integer not null default 100 check (meal_pct between 0 and 100),
+  unique (hotel_id, max_age)
+);
+-- Price per night of a child of a group under a rate: on an extra place, or without a place.
+create table if not exists rate_child_prices (
+  rate_id integer not null references rate_plans(id) on delete cascade,
+  group_id integer not null references child_age_groups(id) on delete cascade,
+  price integer not null check (price >= 0),
+  primary key (rate_id, group_id)
+);
+-- Guests of a booking with identity documents, for registration with the migration
+-- service (MVD). Sensitive personal data: shown only inside the hotel's cabinet.
+create table if not exists booking_guests (
+  id integer primary key,
+  booking_id integer not null references bookings(id) on delete cascade,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  last_name text not null,
+  first_name text not null,
+  middle_name text not null default '',
+  birth_date text not null,
+  sex text not null default '' check (sex in ('', 'm', 'f')),
+  citizenship text not null default 'RUS',
+  doc_type text not null,
+  doc_series text not null default '',
+  doc_number text not null,
+  doc_issued_at text not null default '',
+  doc_issued_by text not null default '',
+  doc_code text not null default '',
+  reg_address text not null default '',
+  migration_card text not null default '',
+  visa text not null default '',
+  mvd_status text not null default 'new' check (mvd_status in ('new','sent','not_required')),
+  mvd_sent_at text,
+  created_at text not null default (datetime('now'))
+);
+create index if not exists booking_guests_booking on booking_guests(booking_id);
+create index if not exists booking_guests_hotel on booking_guests(hotel_id, mvd_status);
 create table if not exists room_types (
   id integer primary key,
   hotel_id integer not null references hotels(id) on delete cascade,
@@ -245,6 +291,7 @@ const COLUMNS = {
     paid_amount: 'integer not null default 0',
     created_by: 'integer',
     channel_ref: 'text',
+    children_ages: "text not null default '[]'",
   },
 };
 
@@ -260,6 +307,9 @@ function migrate(db) {
   db.exec("update bookings set paid_amount = total where paid = 1 and paid_amount = 0");
   // Rate discounts became adjustments: "-12%" instead of discount_pct = 12.
   db.exec("update rate_plans set adjust_type = 'pct', adjust_value = -discount_pct, discount_pct = 0 where discount_pct > 0 and adjust_value = 0");
+  // Hotels without age groups get one group "Дети" that keeps the old single-price behaviour.
+  db.exec(`insert into child_age_groups (hotel_id, name, max_age) select h.id, 'Дети', max(1, min(18, h.child_max_age)) from hotels h
+    where not exists (select 1 from child_age_groups g where g.hotel_id = h.id)`);
   // Bookings from before segments: one segment with the booking's room.
   db.exec(`insert into stay_segments (booking_id, hotel_id, room_type_id, room_id, start, end)
     select b.id, b.hotel_id, b.room_type_id, b.room_id, b.checkin, b.checkout from bookings b
