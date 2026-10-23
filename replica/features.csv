@@ -24,10 +24,10 @@ Extranet sign in,extranet,must,yes,yes,
 Dashboard with arrivals departures occupancy revenue,extranet,must,yes,yes,
 Bookings list with filters,extranet,must,yes,yes,
 Booking detail and status changes,extranet,must,yes,yes,
-Availability and price grid (chessboard) editable,extranet,must,yes,yes,
+Availability and price grid (chessboard) editable,extranet,must,yes,yes,"""Цены и наличие"" per category"
 Close / open sales per date,extranet,must,yes,yes,
 Room types and rate plans management,extranet,must,yes,yes,
-Leads inbox from demo requests,extranet,should,yes,yes,
+Leads inbox from demo requests,extranet,should,yes,yes,moved to the platform panel /admin
 Hotel settings,extranet,should,yes,yes,
 Channel manager: connect channels and push availability,channel manager,must,yes,yes,simulated channels with sync log; no real OTA APIs
 Channel sync log,channel manager,should,yes,yes,
@@ -38,3 +38,31 @@ MVD registration e-keys Wi-Fi iiko,integrations,could,yes,skip,regulated / hardw
 Rate shopper data,add-ons,could,yes,skip,competitor price scraping is their data pipeline
 Reputation reviews aggregation,add-ons,could,yes,skip,OTA reviews data not ours
 Customer logos testimonials photos,marketing,could,yes,skip,their content
+"Room-level tape chart (rooms × days, guest names)",extranet,must,yes,yes,/app/chess
+Unassigned bookings row and drag to move between rooms,extranet,must,yes,yes,HTML5 drag + form in the booking card
+Create booking from an empty chessboard cell,extranet,should,yes,yes,
+Extend / shorten stay by dragging,extranet,should,yes,no,next
+Split stay into segments when moving mid-stay,extranet,could,yes,no,next
+"Room stock: numbers, floors, sort order, cleaning status, repair",extranet,must,yes,yes,
+Configurable room order on the chessboard,extranet,should,yes,yes,by category / number / floor
+Main and extra places with adult/child extra-bed prices,rates,must,yes,yes,
+Child age groups with separate prices,rates,should,yes,partial,one age limit for now
+Derived rates and CTA/CTD restrictions,rates,could,yes,no,next
+Extras grouped into folders,extras,should,yes,yes,
+Manual booking by staff with own price,extranet,must,yes,yes,
+Payments in booking card and balances,extranet,must,yes,yes,cash / card / transfer
+Check-in requires an assigned room; checkout marks room dirty,extranet,should,yes,yes,
+"Tourist tax: rate, 100 RUB/night minimum, lodging-only base, report",extranet,must,yes,yes,
+Booking journal with source filter and channel reference,extranet,must,yes,yes,
+Booking change history,extranet,should,yes,no,next
+Reports: occupancy/ADR/RevPAR by day and category,reports,must,yes,yes,
+Reports: sales by source and cancellations,reports,should,yes,yes,
+Reports: arrivals / departures / in-house lists,reports,should,yes,yes,
+Reports CSV export,reports,should,yes,yes,
+MVD guest list and e-registration,reports,could,yes,no,regulated; next
+"Settings: booking window, cut-off, payment methods, prepay, cancellation, tax",settings,must,yes,yes,
+Staff and roles (owner / administrator),settings,must,yes,yes,
+Housekeeping and investor roles,settings,could,yes,no,next
+Self sign-up creates an isolated property,platform,must,yes,yes,
+Several properties per user with a switcher (chains),platform,should,yes,yes,
+Platform admin: all tenants and leads,platform,should,yes,yes,/admin

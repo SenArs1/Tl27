@@ -94,29 +94,38 @@ export function engineLayout({ title, hotel, body }) {
 
 const APP_NAV = [
   ['/app', 'home', 'Сводка'],
-  ['/app/bookings', 'list', 'Брони'],
-  ['/app/grid', 'calendar', 'Шахматка'],
+  ['/app/chess', 'grid', 'Шахматка'],
+  ['/app/bookings', 'list', 'Журнал броней'],
+  ['/app/prices', 'calendar', 'Цены и наличие'],
   ['/app/rooms', 'bed', 'Номера и тарифы'],
   ['/app/channels', 'share', 'Каналы продаж'],
   ['/app/reports', 'report', 'Отчёты'],
-  ['/app/leads', 'inbox', 'Заявки'],
   ['/app/settings', 'settings', 'Настройки'],
 ];
 
-export function appLayout({ title, req, hotel, body, msg }) {
-  const path = req.path;
+export function appLayout({ title, req, hotel, body, msg, wide = false }) {
+  const path = req.path === '/' ? req.baseUrl : req.baseUrl + req.path;
+  const hotels = req.hotels || [];
   return html`${head(`${title} — ${BRAND.name}`)}
 <body class="app">
 <a class="skip" href="#main">К содержанию</a>
 <div class="app-shell">
   <aside class="app-side" id="app-side">
     <a class="logo logo--light" href="/app">${LOGO}<span>${BRAND.name}</span></a>
-    <p class="app-hotel">${hotel.name}</p>
+    ${hotels.length > 1
+      ? html`<form method="post" action="/app/switch" class="app-switch">
+          <input type="hidden" name="_csrf" value="${req.session.csrf}">
+          <label for="hotel-switch" class="sr-only">Объект</label>
+          <select id="hotel-switch" name="hotel_id" data-autosubmit>${hotels.map((h) => html`<option value="${h.id}" ${h.id === hotel.id ? raw('selected') : ''}>${h.name}</option>`)}</select>
+          <noscript><button type="submit">Открыть</button></noscript>
+        </form>`
+      : html`<p class="app-hotel">${hotel.name}</p>`}
     <nav aria-label="Разделы кабинета">
       ${APP_NAV.map(([href, ic, label]) => {
         const active = href === '/app' ? path === '/app' || path === '/app/' : path.startsWith(href);
         return html`<a href="${href}" ${active ? raw('aria-current="page"') : ''}>${icon(ic, 20)}<span>${label}</span></a>`;
       })}
+      ${req.user.platform ? html`<a href="/admin">${icon('inbox', 20)}<span>Платформа</span></a>` : ''}
     </nav>
     <form method="post" action="/app/logout" class="app-logout">
       <input type="hidden" name="_csrf" value="${req.session.csrf}">
@@ -127,9 +136,9 @@ export function appLayout({ title, req, hotel, body, msg }) {
     <header class="app-top">
       <button class="burger burger--app" type="button" aria-expanded="false" aria-controls="app-side" data-toggle="app-side">${icon('menu')}<span class="sr-only">Меню</span></button>
       <h1>${title}</h1>
-      <span class="app-user">${req.user.name}</span>
+      <span class="app-user">${req.user.name} · ${req.user.role === 'owner' ? 'владелец' : 'администратор'}</span>
     </header>
-    <main id="main" class="app-content" data-csrf="${req.session.csrf}">${flash(msg)}${body}</main>
+    <main id="main" class="app-content${wide ? ' app-content--wide' : ''}" data-csrf="${req.session.csrf}">${flash(msg)}${body}</main>
   </div>
 </div>
 </body></html>`.value;

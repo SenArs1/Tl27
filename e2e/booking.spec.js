@@ -49,7 +49,7 @@ test('F01+F03+F02: guest books with promo and extras, hotelier sees it, guest ca
 
 test('no rooms: closed dates show empty state with shift button', async ({ page }) => {
   await signIn(page);
-  await page.goto('/app/grid');
+  await page.goto('/app/prices');
   await page.getByLabel('Категория', { exact: true }).selectOption('all');
   await page.locator('form.bulk').getByLabel('С', { exact: true }).fill(day(70));
   await page.getByLabel('По (включительно)').fill(day(71));

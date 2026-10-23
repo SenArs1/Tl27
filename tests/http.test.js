@@ -88,13 +88,14 @@ test('F04: grid cell edit and bulk close reach the booking engine', async () => 
   const { cookie, csrf } = await login(ctx.base);
   const { checkin, checkout } = stay(40, 1);
   const room = ctx.db.prepare("select * from room_types where name = 'Семейный'").get();
-  const r = await fetch(`${ctx.base}/app/grid`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify({ room: room.id, date: checkin, price: 9999, available: 3, min_stay: 1, open: true }) });
+  const r = await fetch(`${ctx.base}/app/prices`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify({ room: room.id, date: checkin, price: 9999, available: 3, min_stay: 1, open: true }) });
   assert.equal(r.status, 200);
   const offers = await (await fetch(`${ctx.base}/api/h/severny-bereg/offers?checkin=${checkin}&checkout=${checkout}&adults=2`)).json();
-  assert.equal(offers.offers.find((o) => o.room.id === room.id).rates[0].total, 9999);
-  const tooMany = await fetch(`${ctx.base}/app/grid`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify({ room: room.id, date: checkin, price: 1, available: 99, min_stay: 1, open: true }) });
+  // 9 999 ₽ + 2% tourist tax
+  assert.equal(offers.offers.find((o) => o.room.id === room.id).rates[0].total, 9999 + 200);
+  const tooMany = await fetch(`${ctx.base}/app/prices`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify({ room: room.id, date: checkin, price: 1, available: 99, min_stay: 1, open: true }) });
   assert.equal(tooMany.status, 422);
-  await fetch(`${ctx.base}/app/grid/bulk`, { method: 'POST', redirect: 'manual', headers: { cookie }, body: form({ _csrf: csrf, room: room.id, from: checkin, to: checkin, days: 'all', action: 'close', value: '' }) });
+  await fetch(`${ctx.base}/app/prices/bulk`, { method: 'POST', redirect: 'manual', headers: { cookie }, body: form({ _csrf: csrf, room: room.id, from: checkin, to: checkin, days: 'all', action: 'close', value: '' }) });
   const after = await (await fetch(`${ctx.base}/api/h/severny-bereg/offers?checkin=${checkin}&checkout=${checkout}&adults=2`)).json();
   assert.equal(after.offers.find((o) => o.room.id === room.id).reason, 'sold_out');
   // A connected channel logged the updates
@@ -108,7 +109,7 @@ test('F05/F08: channels toggle, room create, booking status flow, other hotel da
   assert.equal(ctx.db.prepare('select connected from channels where id = ?').get(ch.id).connected, 1);
   assert.equal(ctx.db.prepare("select kind from channel_log where channel_id = ? order by id desc").get(ch.id).kind, 'full');
 
-  await fetch(`${ctx.base}/app/rooms`, { method: 'POST', redirect: 'manual', headers: { cookie }, body: form({ _csrf: csrf, name: 'Домик у воды', capacity: 5, total_rooms: 2, base_price: 9000 }) });
+  await fetch(`${ctx.base}/app/rooms/types`, { method: 'POST', redirect: 'manual', headers: { cookie }, body: form({ _csrf: csrf, name: 'Домик у воды', capacity: 5, extra_beds: 1, base_price: 9000 }) });
   assert.ok(ctx.db.prepare("select * from room_types where name = 'Домик у воды'").get());
 
   // second hotel with its own booking: not visible to demo user
@@ -129,7 +130,7 @@ test('F05/F08: channels toggle, room create, booking status flow, other hotel da
   assert.equal(ctx.db.prepare('select status from bookings where id = ?').get(own.id).status, 'checked_in');
   const illegal = await fetch(`${ctx.base}/app/bookings/${own.id}/status`, { method: 'POST', redirect: 'manual', headers: { cookie }, body: form({ _csrf: csrf, status: 'confirmed' }) });
   assert.match(illegal.headers.get('location'), /e=1/);
-  for (const p of ['/app', '/app/bookings', '/app/grid', '/app/rooms', '/app/channels', '/app/leads', '/app/reports', '/app/settings']) {
+  for (const p of ['/app', '/app/chess', '/app/bookings', '/app/bookings/new', '/app/prices', '/app/rooms', '/app/channels', '/app/reports', '/app/reports?tab=sales', '/app/reports?tab=lists', '/app/reports?tab=tax', '/app/settings', '/app/settings/booking', '/app/settings/team', '/app/settings/properties', '/app/settings/widget']) {
     assert.equal((await fetch(ctx.base + p, { headers: { cookie } })).status, 200, p);
   }
 });

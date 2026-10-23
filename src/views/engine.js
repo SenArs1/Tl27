@@ -21,7 +21,7 @@ export function searchForm(hotel, query, errors = {}) {
     ${field({ name: 'checkin', label: 'Заезд', type: 'date', value: query.checkin, error: errors.checkin, attrs: `min="${t}" required` })}
     ${field({ name: 'checkout', label: 'Выезд', type: 'date', value: query.checkout, error: errors.checkout, attrs: `min="${addDays(t, 1)}" required` })}
     ${field({ name: 'adults', label: 'Взрослые', type: 'number', value: query.adults, error: errors.adults, attrs: 'min="1" max="12" inputmode="numeric"' })}
-    ${field({ name: 'children', label: 'Дети', type: 'number', value: query.children, error: errors.children, attrs: 'min="0" max="8" inputmode="numeric"' })}
+    ${field({ name: 'children', label: `Дети до ${hotel.child_max_age ?? 12} лет`, type: 'number', value: query.children, error: errors.children, attrs: 'min="0" max="8" inputmode="numeric"' })}
     ${field({ name: 'promo', label: 'Промокод', value: query.promo, attrs: 'autocomplete="off" maxlength="32"' })}
     <button class="btn btn--accent btn--lg" type="submit">Найти номера</button>
   </form>`;
@@ -38,7 +38,8 @@ export function hotelPage(hotel, rooms, query, errors) {
     </section>
     ${searchForm(hotel, query, errors)}
     <section class="section-sm"><h2>Номера</h2>
-      <div class="cards cards--2">${rooms.map((r) => html`<article class="card room-mini"><div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div><div><h3>${r.name}</h3><p class="muted">${r.area_m2} м² · до ${r.capacity} ${plural(r.capacity, 'гостя', 'гостей', 'гостей')}</p><p>от ${rub(r.base_price)} за ночь</p></div></article>`)}</div>
+      ${rooms.length ? '' : html`<div class="card empty"><p>Отель ещё не открыл онлайн-продажи. Позвоните нам: ${hotel.phone || 'телефон уточняется'}</p></div>`}
+      <div class="cards cards--2">${rooms.map((r) => html`<article class="card room-mini"><div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div><div><h3>${r.name}</h3><p class="muted">${r.area_m2} м² · ${capacityText(r)}</p><p>от ${rub(r.base_price)} за ночь</p></div></article>`)}</div>
     </section>`,
   });
 }
@@ -62,18 +63,18 @@ export function resultsPage(hotel, query, result) {
 
 function offerCard(hotel, query, o, nights) {
   const r = o.room;
-  const reasonText = { capacity: `Вмещает до ${r.capacity} гостей`, sold_out: 'Нет свободных номеров на эти даты', min_stay: `Минимум ${nightsLabel(o.minStay)} на эти даты` }[o.reason];
+  const reasonText = { capacity: `Вмещает ${capacityText(r)}`, sold_out: 'Нет свободных номеров на эти даты', min_stay: `Минимум ${nightsLabel(o.minStay)} на эти даты` }[o.reason];
   return html`<article class="card offer ${o.available ? '' : 'offer--off'}" aria-label="${r.name}">
     <div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div>
     <div class="offer__body">
       <h2 class="h3">${r.name}</h2>
-      <p class="muted">${r.area_m2} м² · ${r.beds} · до ${r.capacity} ${plural(r.capacity, 'гостя', 'гостей', 'гостей')}</p>
+      <p class="muted">${r.area_m2} м² · ${r.beds} · ${capacityText(r)}</p>
       <p>${r.description}</p>
       ${o.available && o.left <= 2 ? html`<p class="badge badge--warn">Осталось ${o.left} ${plural(o.left, 'номер', 'номера', 'номеров')}</p>` : ''}
       ${o.available ? html`<ul class="rates">${o.rates.map(({ rate, price }) => html`<li class="rate">
           <div><strong>${rate.name}</strong><span class="muted">${MEAL[rate.meal]} · ${rate.refundable ? 'бесплатная отмена' : 'без возврата'}</span>
           ${rate.description ? html`<small class="muted">${rate.description}</small>` : ''}</div>
-          <div class="rate__price">${price.total < price.base + price.meals ? html`<s class="muted">${rub(price.base + price.meals)}</s>` : ''}<strong>${rub(price.total)}</strong><small class="muted">за ${nightsLabel(nights)}</small></div>
+          <div class="rate__price">${price.rateDiscount + price.promoDiscount ? html`<s class="muted">${rub(price.total + price.rateDiscount + price.promoDiscount)}</s>` : ''}<strong>${rub(price.total)}</strong><small class="muted">за ${nightsLabel(nights)}${price.extraAdults + price.extraChildren ? `, вкл. доп. места` : ''}${price.tax ? ', с налогом' : ''}</small></div>
           <a class="btn btn--primary" href="/h/${hotel.slug}/checkout?${qs(query, { room: r.id, rate: rate.id })}" aria-label="Выбрать: ${r.name}, ${rate.name}">Выбрать</a>
         </li>`)}</ul>`
         : html`<p class="badge badge--off">${reasonText}</p>`}
@@ -101,13 +102,14 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
         ${field({ name: 'guest_phone', label: 'Телефон', type: 'tel', value: values.guest_phone, error: errors.guest_phone, attrs: 'autocomplete="tel" required' })}
         ${field({ name: 'comment', label: 'Пожелания (необязательно)', type: 'textarea', value: values.comment })}
         ${extras.length ? html`<fieldset class="extras"><legend class="h3">Добавить к брони</legend>
-          ${extras.map((e) => html`<label class="check extra"><input type="checkbox" name="extras" value="${e.id}" data-price="${e.price}" data-per="${e.per}" ${chosen.includes(e.id) ? raw('checked') : ''}>
-            <span><strong>${e.name}</strong> — ${rub(e.price)} ${e.per === 'stay' ? 'за всё' : e.per === 'night' ? 'за ночь' : 'за гостя в ночь'}<small class="muted">${e.description}</small></span></label>`)}
+          ${groupExtras(extras).map(([group, list]) => html`${group ? html`<p class="extras__group">${group}</p>` : ''}${list.map((e) => html`<label class="check extra"><input type="checkbox" name="extras" value="${e.id}" data-price="${e.price}" data-per="${e.per}" ${chosen.includes(e.id) ? raw('checked') : ''}>
+            <span><strong>${e.name}</strong> — ${rub(e.price)} ${e.per === 'stay' ? 'за всё' : e.per === 'night' ? 'за ночь' : 'за гостя в ночь'}<small class="muted">${e.description}</small></span></label>`)}`)}
         </fieldset>` : ''}
         <fieldset><legend class="h3">Оплата</legend>
-          <label class="check"><input type="radio" name="payment" value="hotel" ${values.payment !== 'card' ? raw('checked') : ''}><span>При заселении</span></label>
-          <label class="check"><input type="radio" name="payment" value="card" ${values.payment === 'card' ? raw('checked') : ''}><span>Картой сейчас <small class="muted">(тестовый режим, деньги не списываются)</small></span></label>
+          ${hotel.pay_at_hotel ? html`<label class="check"><input type="radio" name="payment" value="hotel" ${values.payment !== 'card' ? raw('checked') : ''}><span>При заселении</span></label>` : ''}
+          ${hotel.pay_card ? html`<label class="check"><input type="radio" name="payment" value="card" ${values.payment === 'card' || !hotel.pay_at_hotel ? raw('checked') : ''}><span>Картой сейчас${hotel.prepay_pct && hotel.prepay_pct < 100 ? ` — предоплата ${hotel.prepay_pct}%` : ''} <small class="muted">(тестовый режим, деньги не списываются)</small></span></label>` : ''}
         </fieldset>
+        ${hotel.cancel_policy ? html`<p class="muted"><strong>Условия отмены.</strong> ${hotel.cancel_policy}</p>` : ''}
         <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''} required><span>Согласен с условиями тарифа и обработкой персональных данных</span></label>
         ${errors.agree ? html`<p class="field-error">${errors.agree}</p>` : ''}
         <button class="btn btn--accent btn--lg btn--block" type="submit" data-submit>Забронировать</button>
@@ -119,9 +121,11 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
         <dl class="kv"><dt>Заезд</dt><dd>${fmtDate(query.checkin)}, с ${hotel.checkin_time}</dd><dt>Выезд</dt><dd>${fmtDate(query.checkout)}, до ${hotel.checkout_time}</dd><dt>Гости</dt><dd>${query.adults} взр.${query.children ? `, ${query.children} дет.` : ''}</dd></dl>
         <ul class="quote" data-summary data-nights="${nights}" data-guests="${query.adults + query.children}" data-stay="${price.total}">
           <li><span>Проживание, ${nightsLabel(nights)}</span><span>${rub(price.base)}</span></li>
+          ${price.extraBeds ? html`<li><span>Доп. места: ${price.extraAdults ? `${price.extraAdults} взр.` : ''}${price.extraAdults && price.extraChildren ? ', ' : ''}${price.extraChildren ? `${price.extraChildren} дет.` : ''}</span><span>${rub(price.extraBeds)}</span></li>` : ''}
           ${price.meals ? html`<li><span>Питание</span><span>${rub(price.meals)}</span></li>` : ''}
           ${price.rateDiscount ? html`<li><span>Скидка тарифа</span><span>−${rub(price.rateDiscount)}</span></li>` : ''}
           ${price.promoDiscount ? html`<li><span>Промокод ${query.promo}</span><span>−${rub(price.promoDiscount)}</span></li>` : ''}
+          ${price.tax ? html`<li><span>Туристический налог</span><span>${rub(price.tax)}</span></li>` : ''}
           ${exSum.map((e) => html`<li><span>${e.name}</span><span></span></li>`)}
         </ul>
         <p class="quote__total"><span>Итого</span><strong data-grand>${rub(price.total)}</strong></p>
@@ -151,7 +155,8 @@ export function confirmationPage(hotel, b, room, rate, { justBooked = false, err
         <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
         ${extras.length ? html`<dt>Допуслуги</dt><dd>${extras.map((e) => `${e.name} × ${e.qty}`).join(', ')}</dd>` : ''}
         <dt>Сумма</dt><dd><strong>${rub(b.total)}</strong>${b.discount_total ? html` <span class="muted">(скидка ${rub(b.discount_total)})</span>` : ''}</dd>
-        <dt>Оплата</dt><dd>${b.payment === 'card' ? 'Оплачено картой (тест)' : 'При заселении'}</dd>
+        ${b.tax_total ? html`<dt>в т.ч. тур. налог</dt><dd>${rub(b.tax_total)}</dd>` : ''}
+        <dt>Оплата</dt><dd>${b.paid_amount ? `Оплачено ${rub(b.paid_amount)} картой (тест)${b.paid_amount < b.total ? `, остаток ${rub(b.total - b.paid_amount)} при заселении` : ''}` : 'При заселении'}</dd>
       </dl>
       ${b.status === 'confirmed' ? html`<form method="post" action="/h/${hotel.slug}/booking/${b.code}/cancel" data-confirm="${rate.refundable ? 'Отменить бронь?' : 'Тариф невозвратный: оплата не вернётся. Всё равно отменить?'}">
         <input type="hidden" name="email" value="${b.guest_email}">
@@ -175,4 +180,18 @@ export function managePage(hotel, { values = {}, error }) {
         <button class="btn btn--primary btn--block" type="submit">Найти</button>
       </form></div>`,
   });
+}
+
+function capacityText(r) {
+  return `до ${r.capacity} ${plural(r.capacity, 'гостя', 'гостей', 'гостей')}${r.extra_beds ? ` + ${r.extra_beds} доп. ${plural(r.extra_beds, 'место', 'места', 'мест')}` : ''}`;
+}
+
+function groupExtras(extras) {
+  const m = new Map();
+  for (const e of extras) {
+    const k = e.group_name || '';
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(e);
+  }
+  return [...m.entries()];
 }

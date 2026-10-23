@@ -1,13 +1,21 @@
 import { html, raw, rub, field } from './html.js';
 import { appLayout, bare } from './layout.js';
 import { statusBadge } from './engine.js';
-import { fmtDate, weekday, isWeekend, nightsLabel, diffDays } from '../lib/dates.js';
+import { fmtDate, fmtShort, weekday, isWeekend, nightsLabel, diffDays } from '../lib/dates.js';
 import { LOGO } from './icons.js';
 import { BRAND } from '../content.js';
+import { PROPERTY_TYPES } from '../lib/hotels.js';
 
-const csrf = (req) => html`<input type="hidden" name="_csrf" value="${req.session.csrf}">`;
-const MEALS = [['none', 'Без питания'], ['breakfast', 'Завтрак'], ['half', 'Завтрак и ужин']];
-const SOURCES = { site: 'Сайт', extranet: 'Вручную' };
+export const csrf = (req) => html`<input type="hidden" name="_csrf" value="${req.session.csrf}">`;
+export const MEALS = [['none', 'Без питания'], ['breakfast', 'Завтрак'], ['half', 'Завтрак и ужин']];
+export const PAY_METHODS = [['cash', 'Наличные'], ['card', 'Карта на стойке'], ['transfer', 'Перевод / счёт'], ['online', 'Онлайн']];
+
+export function sourceName(source, channels = []) {
+  if (source === 'site') return 'Сайт отеля';
+  if (source === 'extranet') return 'Вручную';
+  const c = channels.find((x) => x.code === source);
+  return c ? c.name : source;
+}
 
 export function loginPage({ email = '', error, next = '/app', demo }) {
   return bare({
@@ -21,112 +29,213 @@ export function loginPage({ email = '', error, next = '/app', demo }) {
         ${field({ name: 'email', label: 'Почта', type: 'email', value: email, attrs: 'autocomplete="username" required' })}
         ${field({ name: 'password', label: 'Пароль', type: 'password', attrs: 'autocomplete="current-password" required' })}
         <button class="btn btn--primary btn--block" type="submit">Войти</button>
+        <p>Нет кабинета? <a href="/signup">Зарегистрируйте объект</a></p>
         ${demo ? html`<p class="muted">Демо-доступ: ${demo.email} / ${demo.password}</p>` : ''}
       </form></div>`,
   });
 }
 
-export function dashboardPage({ req, hotel, stats, arrivals, departures, recent }) {
+export function signupPage({ values = {}, errors = {} }) {
+  return bare({
+    title: 'Регистрация объекта',
+    body: html`<div class="login login--wide">
+      <a class="logo" href="/">${LOGO}<span>${BRAND.name}</span></a>
+      <form class="card form" method="post" action="/signup" novalidate>
+        <h1 class="h2">Регистрация объекта</h1>
+        <p class="muted">Создадим отдельный кабинет для вашего объекта. Данные разных объектов никогда не смешиваются.</p>
+        ${field({ prefix: 'su', name: 'hotel_name', label: 'Название объекта', value: values.hotel_name, error: errors.hotel_name, attrs: 'required maxlength="120"' })}
+        ${field({ prefix: 'su', name: 'city', label: 'Город', value: values.city, attrs: 'maxlength="80"' })}
+        ${field({ prefix: 'su', name: 'property_type', label: 'Тип объекта', type: 'select', value: values.property_type || 'hotel', options: PROPERTY_TYPES })}
+        ${field({ prefix: 'su', name: 'name', label: 'Ваше имя', value: values.name, error: errors.name, attrs: 'required autocomplete="name"' })}
+        ${field({ prefix: 'su', name: 'email', label: 'Почта для входа', type: 'email', value: values.email, error: errors.email, attrs: 'required autocomplete="email"' })}
+        ${field({ prefix: 'su', name: 'password', label: 'Пароль (не короче 8 символов)', type: 'password', error: errors.password, attrs: 'required autocomplete="new-password" minlength="8"' })}
+        <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''}><span>Принимаю условия сервиса и <a href="/privacy">политику конфиденциальности</a></span></label>
+        ${errors.agree ? html`<p class="field-error">${errors.agree}</p>` : ''}
+        <button class="btn btn--accent btn--block btn--lg" type="submit">Создать кабинет</button>
+        <p>Уже есть кабинет? <a href="/app/login">Войти</a></p>
+      </form></div>`,
+  });
+}
+
+function spark(points, max) {
+  return html`<div class="spark" role="img" aria-label="${points.map((p) => `${fmtShort(p.date)}: ${p.value}%`).join(', ')}">
+    ${points.map((p) => html`<div class="spark__col ${isWeekend(p.date) ? 'we' : ''}" title="${fmtShort(p.date)}: ${p.value}%"><span style="height:${max ? Math.max(3, Math.round((p.value / max) * 100)) : 3}%"></span><small>${p.date.slice(8)}</small></div>`)}
+  </div>`;
+}
+
+export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhouse, forecast, sources, unassigned, dirty, debtors, channels }) {
+  const empty = s.rooms === 0;
   return appLayout({
     title: 'Сводка',
     req,
     hotel,
-    body: html`<div class="tiles-stat">
-      <div class="stat-tile"><span>Загрузка сегодня</span><strong>${stats.occupancy}%</strong><small>${stats.occupied} из ${stats.rooms} номеров</small></div>
-      <div class="stat-tile"><span>Заезды сегодня</span><strong>${arrivals.length}</strong></div>
-      <div class="stat-tile"><span>Выезды сегодня</span><strong>${departures.length}</strong></div>
-      <div class="stat-tile"><span>Выручка броней за 30 дней</span><strong>${rub(stats.revenue30)}</strong><small>${stats.count30} броней</small></div>
-    </div>
-    <div class="app-cols">
-      <section class="card"><h2 class="h3">Заезжают сегодня</h2>${miniList(arrivals, 'Сегодня заездов нет')}</section>
-      <section class="card"><h2 class="h3">Выезжают сегодня</h2>${miniList(departures, 'Сегодня выездов нет')}</section>
-    </div>
-    <section class="card"><h2 class="h3">Новые брони</h2>${bookingsTable(recent, 'Броней пока нет. Откройте модуль бронирования и сделайте тестовую.')}</section>`,
-  });
-}
-
-function miniList(rows, empty) {
-  if (!rows.length) return html`<p class="muted">${empty}</p>`;
-  return html`<ul class="mini-list">${rows.map((b) => html`<li><a href="/app/bookings/${b.id}">${b.guest_name}</a><span class="muted">${b.room_name}</span></li>`)}</ul>`;
-}
-
-export function bookingsTable(rows, empty) {
-  if (!rows.length) return html`<div class="empty"><p>${empty}</p></div>`;
-  return html`<div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table">
-    <thead><tr><th scope="col">Бронь</th><th scope="col">Гость</th><th scope="col">Номер</th><th scope="col">Даты</th><th scope="col">Сумма</th><th scope="col">Статус</th><th scope="col">Источник</th></tr></thead>
-    <tbody>${rows.map((b) => html`<tr>
-      <td><a href="/app/bookings/${b.id}">${b.code}</a></td><td>${b.guest_name}</td><td>${b.room_name}</td>
-      <td>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}</td><td>${rub(b.total)}</td><td>${statusBadge(b.status)}</td><td>${SOURCES[b.source] || b.source}</td></tr>`)}</tbody>
-  </table></div>`;
-}
-
-export function bookingsPage({ req, hotel, rows, filters }) {
-  return appLayout({
-    title: 'Брони',
-    req,
-    hotel,
-    body: html`<form class="filters card" method="get" action="/app/bookings">
-      ${field({ name: 'q', label: 'Поиск', value: filters.q, attrs: 'placeholder="Имя, почта или номер брони"' })}
-      ${field({ name: 'status', label: 'Статус', type: 'select', value: filters.status, options: [['', 'Все'], ['confirmed', 'Подтверждена'], ['checked_in', 'Заселён'], ['checked_out', 'Выехал'], ['cancelled', 'Отменена'], ['no_show', 'Незаезд']] })}
-      ${field({ name: 'from', label: 'Заезд с', type: 'date', value: filters.from })}
-      ${field({ name: 'to', label: 'Заезд по', type: 'date', value: filters.to })}
-      <button class="btn btn--primary" type="submit">Показать</button>
-    </form>
-    <section class="card">${bookingsTable(rows, 'По этим условиям броней нет')}</section>`,
-  });
-}
-
-export function bookingDetailPage({ req, hotel, b, room, rate, msg }) {
-  const extras = JSON.parse(b.extras || '[]');
-  const next = { confirmed: [['checked_in', 'Заселить'], ['no_show', 'Незаезд'], ['cancelled', 'Отменить']], checked_in: [['checked_out', 'Выселить']] }[b.status] || [];
-  return appLayout({
-    title: `Бронь ${b.code}`,
-    req,
-    hotel,
     msg,
-    body: html`<p><a href="/app/bookings">← Все брони</a></p>
+    body: html`${empty ? html`<div class="card onboarding"><h2 class="h3">С чего начать</h2><ol>
+        <li><a href="/app/rooms">Добавьте категории номеров и сами номера</a> (101, 102…)</li>
+        <li><a href="/app/rooms#rates">Проверьте тарифы</a> и цены в разделе <a href="/app/prices">«Цены и наличие»</a></li>
+        <li><a href="/app/settings/widget">Поставьте модуль бронирования на сайт</a></li></ol></div>` : ''}
+    <div class="tiles-stat">
+      <div class="stat-tile"><span>Загрузка сегодня</span><strong>${s.occupancy}%</strong><small>занято ${s.occupied} из ${s.rooms}, свободно ${s.rooms - s.occupied}</small></div>
+      <div class="stat-tile"><span>Заезды / выезды</span><strong>${arrivals.length} / ${departures.length}</strong><small>проживают ${inhouse} гостей</small></div>
+      <div class="stat-tile"><span>Доход за месяц (ADR / RevPAR)</span><strong>${rub(s.monthRevenue)}</strong><small>${rub(s.adr)} / ${rub(s.revpar)}</small></div>
+      <div class="stat-tile"><span>Ждут оплаты</span><strong>${rub(s.debt)}</strong><small>${debtors} ${debtors === 1 ? 'бронь' : 'броней'} заезжают в ближайшие 7 дней</small></div>
+    </div>
+    ${unassigned || dirty ? html`<div class="alerts">
+      ${unassigned ? html`<a class="alert" href="/app/chess">⚠ ${unassigned} бронь(и) без номера — распределите на шахматке</a>` : ''}
+      ${dirty ? html`<a class="alert" href="/app/rooms#stock">🧹 ${dirty} номер(ов) ждут уборки</a>` : ''}
+    </div>` : ''}
     <div class="app-cols">
-      <section class="card">
-        <h2 class="h3">${b.guest_name} ${statusBadge(b.status)}</h2>
-        <dl class="kv">
-          <dt>Почта</dt><dd><a href="mailto:${b.guest_email}">${b.guest_email}</a></dd>
-          <dt>Телефон</dt><dd><a href="tel:${b.guest_phone}">${b.guest_phone}</a></dd>
-          <dt>Номер</dt><dd>${room.name}</dd><dt>Тариф</dt><dd>${rate.name}</dd>
-          <dt>Даты</dt><dd>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))}</dd>
-          <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
-          <dt>Пожелания</dt><dd>${b.comment || '—'}</dd>
-          <dt>Создана</dt><dd>${b.created_at} UTC, ${SOURCES[b.source] || b.source}</dd>
-        </dl>
-      </section>
-      <section class="card">
-        <h2 class="h3">Оплата</h2>
-        <ul class="quote">
-          <li><span>Проживание</span><span>${rub(b.nights_total)}</span></li>
-          ${extras.map((e) => html`<li><span>${e.name} × ${e.qty}</span><span>${rub(e.sum)}</span></li>`)}
-          ${b.discount_total ? html`<li><span>Скидки${b.promo_code ? ` (в т.ч. ${b.promo_code})` : ''}</span><span>учтены</span></li>` : ''}
-        </ul>
-        <p class="quote__total"><span>Итого</span><strong>${rub(b.total)}</strong></p>
-        <p class="muted">${b.paid ? 'Оплачено картой (тест)' : 'Оплата при заселении'}</p>
-        ${next.length ? html`<h2 class="h3">Действия</h2><div class="actions">${next.map(([s, label]) => html`<form method="post" action="/app/bookings/${b.id}/status" ${s === 'cancelled' ? raw('data-confirm="Отменить бронь и вернуть номера в продажу?"') : ''}>${csrf(req)}<input type="hidden" name="status" value="${s}"><button class="btn ${s === 'cancelled' ? 'btn--danger' : 'btn--secondary'}" type="submit">${label}</button></form>`)}</div>` : ''}
+      <section class="card"><h2 class="h3">Заезжают сегодня</h2>${miniList(arrivals, 'Сегодня заездов нет', 'checked_in', 'Заселить', req)}</section>
+      <section class="card"><h2 class="h3">Выезжают сегодня</h2>${miniList(departures, 'Сегодня выездов нет', 'checked_out', 'Выселить', req)}</section>
+    </div>
+    <div class="app-cols">
+      <section class="card"><h2 class="h3">Загрузка на 14 дней вперёд</h2>${spark(forecast, 100)}</section>
+      <section class="card"><h2 class="h3">Откуда брони за 30 дней</h2>
+        ${sources.length ? html`<ul class="bars">${sources.map((x) => html`<li><span>${sourceName(x.source, channels)}</span><span class="bar" style="--w:${x.pct}%" aria-hidden="true"></span><span>${x.n} · ${rub(x.sum)}</span></li>`)}</ul>
+          <p class="muted">Отмен за 30 дней: ${s.cancelled30}</p>` : html`<p class="muted">Броней за последние 30 дней не было.</p>`}
       </section>
     </div>`,
   });
 }
 
-export function gridPage({ req, hotel, rooms, dates, cells, from, msg }) {
+function miniList(rows, empty, action, label, req) {
+  if (!rows.length) return html`<p class="muted">${empty}</p>`;
+  return html`<ul class="mini-list">${rows.map((b) => html`<li><span><a href="/app/bookings/${b.id}">${b.guest_name}</a><small class="muted">№ ${b.room_number || '—'} · ${b.room_name}${b.paid_amount < b.total ? ` · долг ${rub(b.total - b.paid_amount)}` : ''}</small></span>
+    ${(action === 'checked_in' && b.status === 'confirmed') || (action === 'checked_out' && b.status === 'checked_in')
+      ? html`<form method="post" action="/app/bookings/${b.id}/status">${csrf(req)}<input type="hidden" name="status" value="${action}"><input type="hidden" name="back" value="/app"><button class="btn btn--secondary btn--sm" type="submit">${label}</button></form>`
+      : statusBadge(b.status)}</li>`)}</ul>`;
+}
+
+export function bookingsTable(rows, empty, channels = []) {
+  if (!rows.length) return html`<div class="empty"><p>${empty}</p></div>`;
+  return html`<div class="table-wrap" tabindex="0" role="region" aria-label="Таблица броней, прокручивается по горизонтали"><table class="table">
+    <thead><tr><th scope="col">Бронь</th><th scope="col">Создана</th><th scope="col">Источник</th><th scope="col">Гость</th><th scope="col">Номер</th><th scope="col">Даты</th><th scope="col">Сумма</th><th scope="col">Оплачено</th><th scope="col">Статус</th></tr></thead>
+    <tbody>${rows.map((b) => html`<tr>
+      <td><a href="/app/bookings/${b.id}">${b.code}</a></td><td>${b.created_at.slice(0, 16)}</td><td>${sourceName(b.source, channels)}</td>
+      <td>${b.guest_name}<small class="muted">${b.guest_phone}</small></td><td>${b.room_number ? `№ ${b.room_number}` : html`<span class="badge badge--warn">без номера</span>`}<small class="muted">${b.room_name}</small></td>
+      <td>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}</td><td>${rub(b.total)}</td>
+      <td>${b.paid_amount >= b.total ? html`<span class="badge badge--confirmed">оплачено</span>` : b.paid_amount ? rub(b.paid_amount) : html`<span class="muted">нет</span>`}</td>
+      <td>${statusBadge(b.status)}</td></tr>`)}</tbody>
+  </table></div>`;
+}
+
+export function bookingsPage({ req, hotel, msg, rows, filters, channels, counts }) {
+  return appLayout({
+    title: 'Журнал броней',
+    req,
+    hotel,
+    msg,
+    body: html`<div class="page-actions"><a class="btn btn--primary" href="/app/bookings/new">+ Новая бронь</a>
+      <p class="muted">Все брони объекта в одном списке: с сайта, из каналов продаж и созданные вручную.</p></div>
+    <form class="filters card" method="get" action="/app/bookings">
+      ${field({ name: 'q', label: 'Поиск', value: filters.q, attrs: 'placeholder="Имя, телефон, почта или номер брони"' })}
+      ${field({ name: 'source', label: 'Источник', type: 'select', value: filters.source, options: [['', 'Все'], ['site', 'Сайт отеля'], ['extranet', 'Вручную'], ...channels.map((c) => [c.code, c.name])] })}
+      ${field({ name: 'status', label: 'Статус', type: 'select', value: filters.status, options: [['', 'Все'], ['confirmed', 'Подтверждена'], ['checked_in', 'Проживает'], ['checked_out', 'Выехал'], ['cancelled', 'Отменена'], ['no_show', 'Незаезд']] })}
+      ${field({ name: 'by', label: 'Даты', type: 'select', value: filters.by, options: [['created', 'по дате создания'], ['checkin', 'по дате заезда']] })}
+      ${field({ name: 'from', label: 'С', type: 'date', value: filters.from })}
+      ${field({ name: 'to', label: 'По', type: 'date', value: filters.to })}
+      <button class="btn btn--primary" type="submit">Показать</button>
+    </form>
+    <p class="muted">Найдено: ${rows.length}${counts ? ` · на сумму ${rub(counts.sum)}` : ''}</p>
+    <section class="card">${bookingsTable(rows, 'По этим условиям броней нет', channels)}</section>`,
+  });
+}
+
+export function newBookingPage({ req, hotel, types, rooms, rates, extras, values = {}, errors = {}, formError }) {
+  const v = values;
+  return appLayout({
+    title: 'Новая бронь',
+    req,
+    hotel,
+    body: html`<p><a href="/app/chess">← Шахматка</a></p>
+    ${formError ? html`<div class="flash flash--error" role="alert">${formError}</div>` : ''}
+    <form class="card form form--grid" method="post" action="/app/bookings/new" novalidate>
+      ${csrf(req)}
+      <input type="hidden" name="idem" value="${v.idem}">
+      ${field({ prefix: 'nb', name: 'checkin', label: 'Заезд', type: 'date', value: v.checkin, error: errors.checkin, attrs: 'required' })}
+      ${field({ prefix: 'nb', name: 'checkout', label: 'Выезд', type: 'date', value: v.checkout, error: errors.checkout, attrs: 'required' })}
+      ${field({ prefix: 'nb', name: 'adults', label: 'Взрослые', type: 'number', value: v.adults ?? 2, error: errors.adults, attrs: 'min="1" max="12"' })}
+      ${field({ prefix: 'nb', name: 'children', label: 'Дети', type: 'number', value: v.children ?? 0, error: errors.children, attrs: 'min="0" max="8"' })}
+      ${field({ prefix: 'nb', name: 'type', label: 'Категория', type: 'select', value: v.type, options: types.map((t) => [t.id, `${t.name} (до ${t.capacity}${t.extra_beds ? ` + ${t.extra_beds} доп.` : ''})`]) })}
+      ${field({ prefix: 'nb', name: 'room', label: 'Номер', type: 'select', value: v.room || '', options: [['', 'Подобрать свободный автоматически'], ...rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`])], hint: 'Номер должен относиться к выбранной категории' })}
+      ${field({ prefix: 'nb', name: 'rate', label: 'Тариф', type: 'select', value: v.rate, options: rates.map((r) => [r.id, r.name]) })}
+      ${field({ prefix: 'nb', name: 'price_override', label: 'Своя цена за проживание, ₽', type: 'number', value: v.price_override, attrs: 'min="0"', hint: 'Оставьте пустым — посчитаем по тарифу' })}
+      ${field({ prefix: 'nb', name: 'guest_name', label: 'ФИО гостя', value: v.guest_name, error: errors.guest_name, attrs: 'required' })}
+      ${field({ prefix: 'nb', name: 'guest_phone', label: 'Телефон', type: 'tel', value: v.guest_phone, error: errors.guest_phone, attrs: 'required' })}
+      ${field({ prefix: 'nb', name: 'guest_email', label: 'Почта (необязательно)', type: 'email', value: v.guest_email, error: errors.guest_email })}
+      ${field({ prefix: 'nb', name: 'source_note', label: 'Откуда бронь', type: 'select', value: v.source_note, options: [['phone', 'Звонок'], ['walkin', 'Пришёл на стойку'], ['email', 'Письмо'], ['messenger', 'Мессенджер'], ['other', 'Другое']] })}
+      ${extras.length ? html`<fieldset class="extras-inline"><legend>Допуслуги</legend>${extras.map((e) => html`<label class="check"><input type="checkbox" name="extras" value="${e.id}" ${[].concat(v.extras || []).map(String).includes(String(e.id)) ? raw('checked') : ''}><span>${e.name} — ${rub(e.price)}</span></label>`)}</fieldset>` : ''}
+      ${field({ prefix: 'nb', name: 'comment', label: 'Комментарий', type: 'textarea', value: v.comment })}
+      <div class="actions"><button class="btn btn--primary" type="submit">Создать бронь</button><a class="btn btn--ghost" href="/app/chess">Отмена</a></div>
+    </form>`,
+  });
+}
+
+export function bookingDetailPage({ req, hotel, b, room, rate, physical, rooms, payments, channels, msg }) {
+  const extras = JSON.parse(b.extras || '[]');
+  const next = { confirmed: [['checked_in', 'Заселить'], ['no_show', 'Незаезд'], ['cancelled', 'Отменить бронь']], checked_in: [['checked_out', 'Выселить']] }[b.status] || [];
+  const debt = b.total - b.paid_amount;
+  const live = !['cancelled', 'no_show'].includes(b.status);
+  return appLayout({
+    title: `Бронь ${b.code}`,
+    req,
+    hotel,
+    msg,
+    body: html`<p><a href="/app/bookings">← Журнал броней</a> · <a href="/app/chess?from=${b.checkin}">Показать на шахматке</a></p>
+    <div class="app-cols">
+      <section class="card">
+        <h2 class="h3">${b.guest_name} ${statusBadge(b.status)}</h2>
+        <dl class="kv">
+          <dt>Телефон</dt><dd><a href="tel:${b.guest_phone}">${b.guest_phone}</a></dd>
+          <dt>Почта</dt><dd>${b.guest_email ? html`<a href="mailto:${b.guest_email}">${b.guest_email}</a>` : '—'}</dd>
+          <dt>Категория</dt><dd>${room.name}</dd>
+          <dt>Номер</dt><dd>${physical ? `№ ${physical.number}` : html`<span class="badge badge--warn">не назначен</span>`}</dd>
+          <dt>Тариф</dt><dd>${rate.name}</dd>
+          <dt>Даты</dt><dd>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))}</dd>
+          <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
+          <dt>Пожелания</dt><dd>${b.comment || '—'}</dd>
+          <dt>Источник</dt><dd>${sourceName(b.source, channels)}${b.channel_ref ? ` (${b.channel_ref})` : ''}</dd>
+          <dt>Создана</dt><dd>${b.created_at} UTC</dd>
+        </dl>
+        ${next.length ? html`<div class="actions">${next.map(([s, label]) => html`<form method="post" action="/app/bookings/${b.id}/status" ${s === 'cancelled' ? raw('data-confirm="Отменить бронь и вернуть номера в продажу?"') : ''}>${csrf(req)}<input type="hidden" name="status" value="${s}"><button class="btn ${s === 'cancelled' ? 'btn--danger' : s === 'no_show' ? 'btn--ghost' : 'btn--primary'}" type="submit">${label}</button></form>`)}</div>` : ''}
+        ${live ? html`<form class="form form--inline move-form" method="post" action="/app/bookings/${b.id}/move">${csrf(req)}
+          ${field({ prefix: 'mv', name: 'room_id', label: 'Переселить в номер', type: 'select', value: b.room_id || '', options: [['', '— без номера —'], ...rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`])] })}
+          <button class="btn btn--secondary" type="submit">Переселить</button></form>` : ''}
+      </section>
+      <section class="card">
+        <h2 class="h3">Счёт</h2>
+        <ul class="quote">
+          <li><span>Проживание${b.extra_beds_total ? ` (в т.ч. доп. места ${rub(b.extra_beds_total)})` : ''}</span><span>${rub(b.nights_total)}</span></li>
+          ${extras.map((e) => html`<li><span>${e.name} × ${e.qty}</span><span>${rub(e.sum)}</span></li>`)}
+          ${b.tax_total ? html`<li><span>Туристический налог</span><span>${rub(b.tax_total)}</span></li>` : ''}
+          ${b.discount_total ? html`<li><span>Скидки${b.promo_code ? ` (в т.ч. ${b.promo_code})` : ''}</span><span>−${rub(b.discount_total)} учтено</span></li>` : ''}
+        </ul>
+        <p class="quote__total"><span>Итого</span><strong>${rub(b.total)}</strong></p>
+        <p class="quote__total"><span>Оплачено</span><strong>${rub(b.paid_amount)}</strong></p>
+        ${debt > 0 ? html`<p class="quote__total quote__debt"><span>К оплате</span><strong>${rub(debt)}</strong></p>` : html`<p class="badge badge--confirmed">Оплачено полностью</p>`}
+        ${payments.length ? html`<h3 class="h3">Платежи</h3><ul class="mini-list">${payments.map((p) => html`<li><span>${p.created_at.slice(0, 16)} · ${PAY_METHODS.find((m) => m[0] === p.method)[1]}${p.note ? ` · ${p.note}` : ''}</span><span>${rub(p.amount)}</span></li>`)}</ul>` : ''}
+        ${live && debt > 0 ? html`<form class="form form--inline" method="post" action="/app/bookings/${b.id}/pay">${csrf(req)}
+          ${field({ prefix: 'pay', name: 'amount', label: 'Сумма, ₽', type: 'number', value: debt, attrs: `min="1" max="${debt}" required` })}
+          ${field({ prefix: 'pay', name: 'method', label: 'Способ', type: 'select', value: 'card', options: PAY_METHODS.filter((m) => m[0] !== 'online') })}
+          <button class="btn btn--primary" type="submit">Принять оплату</button></form>` : ''}
+      </section>
+    </div>`,
+  });
+}
+export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
   const prev = dates.length ? dates[0] : from;
   return appLayout({
-    title: 'Шахматка',
+    title: 'Цены и наличие',
     req,
     hotel,
     msg,
     body: html`<div class="grid-toolbar">
-      <a class="btn btn--ghost btn--sm" href="/app/grid?from=${shift(prev, -14)}">← 2 недели</a>
-      <form method="get" action="/app/grid" class="inline-form"><label for="grid-from" class="sr-only">С даты</label><input id="grid-from" type="date" name="from" value="${from}"><button class="btn btn--secondary btn--sm">Показать</button></form>
-      <a class="btn btn--ghost btn--sm" href="/app/grid?from=${shift(prev, 14)}">2 недели →</a>
-      <p class="muted grid-hint">Нажмите на ячейку, чтобы изменить цену, число свободных номеров или закрыть продажи.</p>
+      <a class="btn btn--ghost btn--sm" href="/app/prices?from=${shift(prev, -14)}">← 2 недели</a>
+      <form method="get" action="/app/prices" class="inline-form"><label for="grid-from" class="sr-only">С даты</label><input id="grid-from" type="date" name="from" value="${from}"><button class="btn btn--secondary btn--sm">Показать</button></form>
+      <a class="btn btn--ghost btn--sm" href="/app/prices?from=${shift(prev, 14)}">2 недели →</a>
+      <p class="muted grid-hint">Цены и остатки для продажи по категориям — то, что видят гости на сайте и каналы. Нажмите на ячейку, чтобы изменить цену, остаток, минимальный срок или закрыть продажи.</p>
     </div>
-    <div class="grid-wrap" tabindex="0" aria-label="Шахматка цен и наличия">
+    <div class="grid-wrap" tabindex="0" aria-label="Таблица цен и наличия по категориям">
     <table class="grid" data-grid>
       <thead><tr><th scope="col" class="grid__room">Категория</th>${dates.map((d) => html`<th scope="col" class="${isWeekend(d) ? 'we' : ''}"><span>${weekday(d)}</span>${d.slice(8)}.${d.slice(5, 7)}</th>`)}</tr></thead>
       <tbody>${rooms.map((r) => html`<tr><th scope="row" class="grid__room">${r.name}<small class="muted">${r.total_rooms} ном.</small></th>
@@ -151,7 +260,7 @@ export function gridPage({ req, hotel, rooms, dates, cells, from, msg }) {
     </dialog>
     <section class="card">
       <h2 class="h3">Массовое изменение</h2>
-      <form class="bulk" method="post" action="/app/grid/bulk">
+      <form class="bulk" method="post" action="/app/prices/bulk">
         ${csrf(req)}
         ${field({ prefix: 'bulk', name: 'room', label: 'Категория', type: 'select', options: [['all', 'Все категории'], ...rooms.map((r) => [r.id, r.name])] })}
         ${field({ prefix: 'bulk', name: 'from', label: 'С', type: 'date', value: from, attrs: 'required' })}
@@ -171,74 +280,6 @@ function shift(d, n) {
   return x.toISOString().slice(0, 10);
 }
 
-export function roomsPage({ req, hotel, rooms, rates, extras, promos, msg, errors = {} }) {
-  return appLayout({
-    title: 'Номера и тарифы',
-    req,
-    hotel,
-    msg,
-    body: html`<section class="card">
-      <h2 class="h3">Категории номеров</h2>
-      ${rooms.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table"><thead><tr><th scope="col">Название</th><th scope="col">Мест</th><th scope="col">Номеров</th><th scope="col">Цена по умолчанию</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
-        <tbody>${rooms.map((r) => html`<tr><td>${r.name}</td><td>${r.capacity}</td><td>${r.total_rooms}</td><td>${rub(r.base_price)}</td><td>${r.active ? 'продаётся' : 'скрыт'}</td>
-          <td><details class="row-edit"><summary>Изменить</summary>${roomForm(req, r, `/app/rooms/${r.id}`)}</details></td></tr>`)}</tbody></table></div>`
-        : html`<div class="empty"><p>Категорий пока нет — добавьте первую ниже.</p></div>`}
-      <details class="add" ${errors.room ? raw('open') : ''}><summary class="btn btn--secondary">Добавить категорию</summary>${roomForm(req, {}, '/app/rooms', errors.room)}</details>
-    </section>
-    <section class="card">
-      <h2 class="h3">Тарифы</h2>
-      <div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table"><thead><tr><th scope="col">Тариф</th><th scope="col">Питание</th><th scope="col">Отмена</th><th scope="col">Скидка</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
-      <tbody>${rates.map((r) => html`<tr><td>${r.name}</td><td>${MEALS.find((m) => m[0] === r.meal)[1]}${r.meal_price ? ` (${rub(r.meal_price)}/гость)` : ''}</td><td>${r.refundable ? 'бесплатная' : 'без возврата'}</td><td>${r.discount_pct}%</td><td>${r.active ? 'активен' : 'выключен'}</td>
-        <td><details class="row-edit"><summary>Изменить</summary>${rateForm(req, r, `/app/rates/${r.id}`)}</details></td></tr>`)}</tbody></table></div>
-      <details class="add"><summary class="btn btn--secondary">Добавить тариф</summary>${rateForm(req, {}, '/app/rates')}</details>
-    </section>
-    <div class="app-cols">
-      <section class="card"><h2 class="h3">Допуслуги</h2>
-        <ul class="mini-list">${extras.map((e) => html`<li><span>${e.name} — ${rub(e.price)}</span><form method="post" action="/app/extras/${e.id}/toggle">${csrf(req)}<button class="linklike" type="submit">${e.active ? 'Скрыть' : 'Показать'}</button></form></li>`)}</ul>
-        <form class="form form--inline" method="post" action="/app/extras">${csrf(req)}
-          ${field({ prefix: 'extra', name: 'name', label: 'Название', attrs: 'required maxlength="80"' })}
-          ${field({ prefix: 'extra', name: 'price', label: 'Цена, ₽', type: 'number', attrs: 'min="0" required' })}
-          ${field({ prefix: 'extra', name: 'per', label: 'За что', type: 'select', options: [['stay', 'за всё проживание'], ['night', 'за ночь'], ['guest_night', 'за гостя в ночь']] })}
-          <button class="btn btn--secondary" type="submit">Добавить</button></form>
-      </section>
-      <section class="card"><h2 class="h3">Промокоды</h2>
-        <ul class="mini-list">${promos.map((p) => html`<li><span><code>${p.code}</code> — ${p.discount_pct}%</span><form method="post" action="/app/promos/${p.id}/toggle">${csrf(req)}<button class="linklike" type="submit">${p.active ? 'Выключить' : 'Включить'}</button></form></li>`)}</ul>
-        <form class="form form--inline" method="post" action="/app/promos">${csrf(req)}
-          ${field({ prefix: 'promo', name: 'code', label: 'Код', attrs: 'required maxlength="32" pattern="[A-Za-z0-9_-]+"' })}
-          ${field({ prefix: 'promo', name: 'discount_pct', label: 'Скидка, %', type: 'number', attrs: 'min="1" max="90" required' })}
-          <button class="btn btn--secondary" type="submit">Добавить</button></form>
-      </section>
-    </div>`,
-  });
-}
-
-function roomForm(req, r, action, err) {
-  const pfx = action.replace(/\W+/g, '-').replace(/^-/, '');
-  return html`<form class="form form--grid" method="post" action="${action}">${csrf(req)}
-    ${err ? html`<p class="field-error">${err}</p>` : ''}
-    ${field({ prefix: pfx, name: 'name', label: 'Название', value: r.name, attrs: 'required maxlength="80"' })}
-    ${field({ prefix: pfx, name: 'capacity', label: 'Мест', type: 'number', value: r.capacity ?? 2, attrs: 'min="1" max="12" required' })}
-    ${field({ prefix: pfx, name: 'total_rooms', label: 'Номеров', type: 'number', value: r.total_rooms ?? 1, attrs: 'min="0" max="500" required' })}
-    ${field({ prefix: pfx, name: 'base_price', label: 'Цена за ночь, ₽', type: 'number', value: r.base_price ?? 3000, attrs: 'min="0" required' })}
-    ${field({ prefix: pfx, name: 'area_m2', label: 'Площадь, м²', type: 'number', value: r.area_m2 ?? 18, attrs: 'min="0"' })}
-    ${field({ prefix: pfx, name: 'beds', label: 'Кровати', value: r.beds })}
-    ${field({ prefix: pfx, name: 'description', label: 'Описание', type: 'textarea', value: r.description })}
-    ${r.id ? html`<label class="check"><input type="checkbox" name="active" ${r.active ? raw('checked') : ''}><span>Продаётся</span></label>` : ''}
-    <button class="btn btn--primary" type="submit">Сохранить</button></form>`;
-}
-
-function rateForm(req, r, action) {
-  const pfx = action.replace(/\W+/g, '-').replace(/^-/, '');
-  return html`<form class="form form--grid" method="post" action="${action}">${csrf(req)}
-    ${field({ prefix: pfx, name: 'name', label: 'Название', value: r.name, attrs: 'required maxlength="80"' })}
-    ${field({ prefix: pfx, name: 'meal', label: 'Питание', type: 'select', value: r.meal || 'none', options: MEALS })}
-    ${field({ prefix: pfx, name: 'meal_price', label: 'Питание, ₽ за гостя в ночь', type: 'number', value: r.meal_price ?? 0, attrs: 'min="0"' })}
-    ${field({ prefix: pfx, name: 'discount_pct', label: 'Скидка, %', type: 'number', value: r.discount_pct ?? 0, attrs: 'min="0" max="90"' })}
-    ${field({ prefix: pfx, name: 'description', label: 'Условия', type: 'textarea', value: r.description })}
-    <label class="check"><input type="checkbox" name="refundable" ${r.refundable ?? 1 ? raw('checked') : ''}><span>Бесплатная отмена</span></label>
-    ${r.id ? html`<label class="check"><input type="checkbox" name="active" ${r.active ? raw('checked') : ''}><span>Активен</span></label>` : ''}
-    <button class="btn btn--primary" type="submit">Сохранить</button></form>`;
-}
 
 export function channelsPage({ req, hotel, channels, log, msg }) {
   return appLayout({
@@ -247,81 +288,18 @@ export function channelsPage({ req, hotel, channels, log, msg }) {
     hotel,
     msg,
     body: html`<p class="muted">Площадки в демо вымышленные: подключение показывает, как цены и наличие уходят в каналы. Реальные подключения требуют договоров с площадками.</p>
-    <section class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table">
+    <section class="card"><div class="table-wrap" tabindex="0" role="region" aria-label="Каналы продаж"><table class="table">
       <thead><tr><th scope="col">Канал</th><th scope="col">Комиссия</th><th scope="col">Наценка</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
       <tbody>${channels.map((c) => html`<tr><td>${c.name}</td><td>${c.commission_pct}%</td>
         <td><form class="inline-form" method="post" action="/app/channels/${c.id}/markup">${csrf(req)}<label class="sr-only" for="mk-${c.id}">Наценка для ${c.name}</label><input id="mk-${c.id}" class="input-sm" type="number" name="markup_pct" min="0" max="50" value="${c.markup_pct}"> % <button class="linklike" type="submit">ок</button></form></td>
         <td>${c.connected ? html`<span class="badge badge--confirmed">подключён</span>` : html`<span class="badge badge--off">не подключён</span>`}</td>
-        <td><form method="post" action="/app/channels/${c.id}/toggle">${csrf(req)}<button class="btn btn--sm ${c.connected ? 'btn--ghost' : 'btn--primary'}" type="submit">${c.connected ? 'Отключить' : 'Подключить'}</button></form></td></tr>`)}</tbody>
+        <td class="actions"><form method="post" action="/app/channels/${c.id}/toggle">${csrf(req)}<button class="btn btn--sm ${c.connected ? 'btn--ghost' : 'btn--primary'}" type="submit">${c.connected ? 'Отключить' : 'Подключить'}</button></form>
+          ${c.connected ? html`<form method="post" action="/app/channels/${c.id}/test-booking">${csrf(req)}<button class="btn btn--sm btn--secondary" type="submit">Тестовая бронь</button></form>` : ''}</td></tr>`)}</tbody>
     </table></div></section>
-    <section class="card"><h2 class="h3">Журнал отправок</h2>
+    <section class="card"><h2 class="h3">Журнал обмена с каналами</h2><p class="muted">Что и когда мы отправили в каналы: выгрузки цен и наличия, обновления после броней и отмен. Сами брони — в <a href="/app/bookings">журнале броней</a>.</p>
       ${log.length ? html`<ul class="log">${log.map((l) => html`<li><time>${l.at}</time><strong>${l.channel}</strong><span class="badge badge--${l.kind}">${{ full: 'полная выгрузка', update: 'обновление', booking: 'бронь', disconnect: 'отключение' }[l.kind]}</span><span>${l.summary}</span></li>`)}</ul>`
         : html`<p class="muted">Отправок ещё не было.</p>`}
     </section>`,
   });
 }
 
-export function leadsPage({ req, hotel, leads }) {
-  return appLayout({
-    title: 'Заявки с сайта',
-    req,
-    hotel,
-    body: html`<section class="card">${leads.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table">
-      <thead><tr><th scope="col">Когда</th><th scope="col">Имя</th><th scope="col">Телефон</th><th scope="col">Почта</th><th scope="col">Объект</th><th scope="col">Номеров</th><th scope="col">Сообщение</th></tr></thead>
-      <tbody>${leads.map((l) => html`<tr><td>${l.created_at}</td><td>${l.name}</td><td>${l.phone}</td><td>${l.email}</td><td>${l.property_type}</td><td>${l.rooms ?? ''}</td><td>${l.message}</td></tr>`)}</tbody></table></div>`
-      : html`<div class="empty"><p>Заявок пока нет. Они появятся здесь, когда кто-то заполнит форму «Запросить демо».</p></div>`}</section>`,
-  });
-}
-
-export function reportsPage({ req, hotel, from, to, rows, totals }) {
-  return appLayout({
-    title: 'Отчёты',
-    req,
-    hotel,
-    body: html`<form class="filters card" method="get" action="/app/reports">
-      ${field({ name: 'from', label: 'С', type: 'date', value: from })}
-      ${field({ name: 'to', label: 'По', type: 'date', value: to })}
-      <button class="btn btn--primary" type="submit">Построить</button></form>
-    <div class="tiles-stat">
-      <div class="stat-tile"><span>Загрузка</span><strong>${totals.occupancy}%</strong></div>
-      <div class="stat-tile"><span>Продано ночей</span><strong>${totals.nights}</strong></div>
-      <div class="stat-tile"><span>Выручка за проживание</span><strong>${rub(totals.revenue)}</strong></div>
-      <div class="stat-tile"><span>Средняя цена ночи</span><strong>${rub(totals.adr)}</strong></div>
-    </div>
-    <section class="card"><h2 class="h3">По категориям</h2><div class="table-wrap" tabindex="0" role="region" aria-label="Таблица, прокручивается по горизонтали"><table class="table">
-      <thead><tr><th scope="col">Категория</th><th scope="col">Ночей продано</th><th scope="col">Доступно ночей</th><th scope="col">Загрузка</th><th scope="col">Выручка</th></tr></thead>
-      <tbody>${rows.map((r) => html`<tr><td>${r.name}</td><td>${r.sold}</td><td>${r.capacity}</td><td>
-        <span class="bar" style="--w:${r.occupancy}%" aria-hidden="true"></span> ${r.occupancy}%</td><td>${rub(r.revenue)}</td></tr>`)}</tbody></table></div>
-      <p class="muted">Считаются брони со статусами «подтверждена», «заселён», «выехал». Выручка распределяется по ночам периода.</p></section>`,
-  });
-}
-
-export function settingsPage({ req, hotel, origin, msg, errors = {} }) {
-  const embed = `<div id="stayra-booking"></div>\n<script src="${origin}/widget.js" data-hotel="${hotel.slug}" async></script>`;
-  return appLayout({
-    title: 'Настройки',
-    req,
-    hotel,
-    msg,
-    body: html`<div class="app-cols">
-    <section class="card"><h2 class="h3">Объект</h2>
-      <form class="form" method="post" action="/app/settings">${csrf(req)}
-        ${field({ name: 'name', label: 'Название', value: hotel.name, error: errors.name, attrs: 'required maxlength="120"' })}
-        ${field({ name: 'city', label: 'Город', value: hotel.city })}
-        ${field({ name: 'address', label: 'Адрес', value: hotel.address })}
-        ${field({ name: 'phone', label: 'Телефон', type: 'tel', value: hotel.phone })}
-        ${field({ name: 'email', label: 'Почта', type: 'email', value: hotel.email })}
-        ${field({ name: 'checkin_time', label: 'Заезд с', type: 'time', value: hotel.checkin_time, error: errors.checkin_time })}
-        ${field({ name: 'checkout_time', label: 'Выезд до', type: 'time', value: hotel.checkout_time, error: errors.checkout_time })}
-        ${field({ name: 'description', label: 'Описание для гостей', type: 'textarea', value: hotel.description })}
-        <button class="btn btn--primary" type="submit">Сохранить</button>
-      </form></section>
-    <section class="card"><h2 class="h3">Модуль бронирования на сайт</h2>
-      <p>Вставьте этот код на страницу сайта, где должна быть форма поиска номеров:</p>
-      <pre class="code" tabindex="0"><code>${embed}</code></pre>
-      <button class="btn btn--secondary btn--sm" type="button" data-copy="${embed}">Скопировать код</button>
-      <p>Или дайте гостям прямую ссылку: <a href="/h/${hotel.slug}">${origin}/h/${hotel.slug}</a></p>
-      <p><a href="/widget-demo">Посмотреть виджет на тестовой странице</a></p>
-    </section></div>`,
-  });
-}

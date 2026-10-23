@@ -23,3 +23,28 @@
 | B5 | S4 | `/favicon.ico` returned 404 on third-party pages | redirect to `/favicon.svg` |
 
 Open S1/S2 bugs: none.
+
+## Version 2 (owner feedback, 2026-10-23)
+
+| request | done |
+| --- | --- |
+| How hotels are kept apart | single `scope()` gate, registration, chains with a switcher, roles, `/admin`, isolation tests; plan for Postgres + RLS in `multitenancy.md` |
+| Dashboard: what to add, without clutter | ADR/RevPAR for the month, debts, in-house guests, 14-day forecast, booking sources, alerts "без номера" and "нужна уборка" |
+| The chessboard isn't a chessboard | rebuilt: rows = rooms (201, 202…) by category, guest bars, "Без номера" row, drag-to-move, booking from a cell, sort by category/number/floor, 7/14/30 days, cleaning/repair. The old grid became "Цены и наличие" |
+| No Cancel button when adding a category/rate | "Отмена" in every add/edit form |
+| Main and extra places | in the category: main + extra places; in the rate: extra-bed price for adult/child; placement logic and a price line |
+| Extras groups | groups (folders), moving between groups, grouping in the booking engine |
+| Booking journal | separate "Журнал броней": site, channels, manual; source filter, channel number; test booking from a channel; outgoing log renamed "Журнал обмена" |
+| Reports are empty | cause: the default period was "the last 30 days" while the bookings were in the future. Now the current month, including future bookings; 4 reports + CSV |
+| Leads are unclear | moved to the platform panel `/admin`: these are requests from the Stayra website, not the hotel's |
+| Settings are thin | 5 sections: property and legal details, booking and payment (sales window, cut-off, child age, prepayment, cancellation, tourist tax), staff, my properties, widget |
+
+Bugs found by tests in v2 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B6 | S3 | after saving on "Номера и тарифы" the message was lost: `#anchor` ended up before `?m=` | `back()` keeps the anchor at the end |
+| B7 | S3 | the dashboard and the journal didn't show messages after an action | `msg` passed into those pages |
+| B8 | S4 | today's date in the chessboard header was unreadable on weekends | CSS rule order |
+
+Tests: 28 unit/HTTP (incl. 8 for hotel isolation), 23 e2e + 1 deliberate skip (drag-and-drop on a phone).

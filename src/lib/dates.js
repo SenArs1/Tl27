@@ -55,3 +55,32 @@ export function plural(n, one, few, many) {
 export function nightsLabel(n) {
   return `${n} ${plural(n, 'ночь', 'ночи', 'ночей')}`;
 }
+
+// Local date and HH:MM in the hotel's time zone.
+export function todayIn(tz = 'Europe/Moscow', now = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  } catch {
+    return today(now);
+  }
+}
+
+export function timeIn(tz = 'Europe/Moscow', now = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
+  } catch {
+    return now.toISOString().slice(11, 16);
+  }
+}
+
+export function fmtShort(s) {
+  return `${s.slice(8)}.${s.slice(5, 7)}`;
+}
+
+export function monthBounds(s) {
+  const start = s.slice(0, 8) + '01';
+  const d = new Date(start + 'T00:00:00Z');
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  d.setUTCDate(0);
+  return [start, d.toISOString().slice(0, 10)];
+}

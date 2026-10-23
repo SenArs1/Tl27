@@ -42,17 +42,31 @@ export function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
-// Express middleware: attaches req.user and req.session when the cookie is valid.
+// Hotels a user may open: the home hotel plus any granted through user_hotels.
+export function userHotels(db, userId) {
+  return db.prepare(`select h.id, h.name, h.slug, u.role from users u join hotels h on h.id = u.hotel_id where u.id = ?
+    union select h.id, h.name, h.slug, uh.role from user_hotels uh join hotels h on h.id = uh.hotel_id where uh.user_id = ?
+    order by 2`).all(userId, userId);
+}
+
+// Express middleware: attaches req.user (scoped to the session's current hotel) and req.session.
 export function loadUser(db) {
-  const q = db.prepare(`select s.id as sid, s.csrf, s.expires_at, u.id, u.hotel_id, u.email, u.name, u.role
+  const q = db.prepare(`select s.id as sid, s.csrf, s.expires_at, s.hotel_id as current_hotel, u.id, u.hotel_id, u.email, u.name, u.role, u.is_platform_admin
     from sessions s join users u on u.id = s.user_id where s.id = ?`);
+  const grant = db.prepare('select role from user_hotels where user_id = ? and hotel_id = ?');
   return (req, _res, next) => {
     const sid = parseCookies(req.headers.cookie)[COOKIE];
     if (sid) {
       const row = q.get(sid);
       if (row && row.expires_at > new Date().toISOString()) {
+        let hotelId = row.hotel_id;
+        let role = row.role;
+        if (row.current_hotel && row.current_hotel !== row.hotel_id) {
+          const g = grant.get(row.id, row.current_hotel);
+          if (g) { hotelId = row.current_hotel; role = g.role; }
+        }
         req.session = { id: row.sid, csrf: row.csrf };
-        req.user = { id: row.id, hotel_id: row.hotel_id, email: row.email, name: row.name, role: row.role };
+        req.user = { id: row.id, hotel_id: hotelId, home_hotel_id: row.hotel_id, email: row.email, name: row.name, role, platform: Boolean(row.is_platform_admin) };
       }
     }
     next();
@@ -69,4 +83,15 @@ export function checkCsrf(req, res, next) {
   const token = req.body?._csrf || req.get('x-csrf-token');
   if (req.session && token && token === req.session.csrf) return next();
   res.status(403).send('Сессия устарела. Обновите страницу и попробуйте ещё раз.');
+}
+
+export function requireOwner(req, res, next) {
+  if (req.user?.role === 'owner') return next();
+  res.status(403).send('Этот раздел доступен только владельцу объекта.');
+}
+
+export function requirePlatform(req, res, next) {
+  if (!req.user) return res.redirect(`/app/login?next=${encodeURIComponent(req.originalUrl)}`);
+  if (req.user.platform) return next();
+  res.status(403).send('Раздел для команды платформы.');
 }

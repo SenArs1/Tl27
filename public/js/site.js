@@ -121,6 +121,66 @@
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Скопировано'; } catch { b.textContent = 'Выделите код и скопируйте вручную'; }
   }));
 
+  // Selects that apply themselves (filters, hotel switcher)
+  $$('[data-autosubmit]').forEach((el) => el.addEventListener('change', () => el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit()));
+
+  // "Отмена" inside an add/edit block closes it without reloading
+  $$('[data-close-details]').forEach((a) => a.addEventListener('click', (e) => {
+    const d = a.closest('details');
+    if (!d) return;
+    e.preventDefault();
+    const f = a.closest('form');
+    if (f) f.reset();
+    d.open = false;
+    const s = d.querySelector('summary');
+    if (s) s.focus();
+  }));
+
+  // Chessboard: drag a booking onto another room row to move it
+  const chess = $('[data-chess]');
+  if (chess) {
+    const csrfToken = $('[data-csrf]').dataset.csrf;
+    let dragged = null;
+    chess.addEventListener('dragstart', (e) => {
+      const bar = e.target.closest('[data-booking]');
+      if (!bar) return;
+      dragged = bar;
+      bar.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', bar.dataset.booking);
+    });
+    chess.addEventListener('dragend', () => {
+      if (dragged) dragged.classList.remove('dragging');
+      $$('.drop-ok', chess).forEach((r) => r.classList.remove('drop-ok'));
+      dragged = null;
+    });
+    chess.addEventListener('dragover', (e) => {
+      const row = e.target.closest('[data-room]');
+      if (!row || !dragged) return;
+      e.preventDefault();
+      $$('.drop-ok', chess).forEach((r) => r !== row && r.classList.remove('drop-ok'));
+      row.classList.add('drop-ok');
+    });
+    chess.addEventListener('drop', async (e) => {
+      const row = e.target.closest('[data-room]');
+      if (!row || !dragged) return;
+      e.preventDefault();
+      const id = dragged.dataset.booking;
+      const room = row.dataset.room === '0' ? '' : row.dataset.room;
+      if (dragged.parentElement === row) return;
+      const r = await fetch(`/app/bookings/${id}/move`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json', 'x-csrf-token': csrfToken },
+        body: JSON.stringify({ room_id: room }),
+      });
+      const j = await r.json().catch(() => ({ error: 'Не удалось переселить' }));
+      const url = new URL(location.href);
+      url.searchParams.set('m', j.message || j.error);
+      if (!r.ok) url.searchParams.set('e', '1'); else url.searchParams.delete('e');
+      location.href = url.toString();
+    });
+  }
+
   // Availability grid: edit a cell in a dialog, save via JSON
   const grid = $('[data-grid]');
   if (grid) {
@@ -149,7 +209,7 @@
         price: form.elements.price.value, available: form.elements.available.value,
         min_stay: form.elements.min_stay.value, open: form.elements.open.checked,
       };
-      const r = await fetch('/app/grid', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify(body) });
+      const r = await fetch('/app/prices', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({ error: 'Ошибка сохранения' }));
       if (!r.ok) { err.textContent = j.error; err.hidden = false; return; }
       const c = j.cell;
