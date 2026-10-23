@@ -62,7 +62,7 @@ Reports CSV export,reports,should,yes,yes,
 MVD guest list and e-registration,reports,could,yes,partial,"guest documents, registration card, MVD list with deadlines/status, CSV; sending to MVD is manual (no government API connection)"
 "Settings: booking window, cut-off, payment methods, prepay, cancellation, tax",settings,must,yes,yes,
 Staff and roles (owner / administrator),settings,must,yes,yes,
-Housekeeping and investor roles,settings,could,yes,no,next
+Housekeeping and investor roles,settings,could,yes,yes,"housekeeping: cleaning board only, no guests or money; investor: summary, occupancy and sales, read-only"
 Self sign-up creates an isolated property,platform,must,yes,yes,
 Several properties per user with a switcher (chains),platform,should,yes,yes,
 Platform admin: all tenants and leads,platform,should,yes,yes,/admin
@@ -76,6 +76,6 @@ Booking tags and notes with due dates,extranet,should,yes,yes,"tags with colours
 "Refund, void payment, transfer payment to another booking",extranet,should,yes,yes,
 "Printable confirmation, invoice, payment statement",extranet,should,yes,yes,
 Booking journal export to Excel,extranet,should,yes,yes,CSV with filters
-Several invoices per booking for different payers,extranet,could,yes,no,
-Security deposit,extranet,could,yes,no,
-Group bookings,extranet,should,yes,no,separate project
+Several invoices per booking for different payers,extranet,could,yes,yes,"move lines to a payer's invoice; payments and refunds per invoice; print each"
+Security deposit,extranet,could,yes,yes,"kept apart from paid amount; return, retain for debt or damage"
+Group bookings,extranet,should,yes,yes,"one form creates N rooms all-or-nothing; group payment spread over rooms; cancel together; group invoice"

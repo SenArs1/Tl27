@@ -582,16 +582,18 @@ export function assignUnassigned(db, hotelId) {
   });
 }
 
-export function addPayment(db, booking, amount, method, note = '', userId = null, kind = 'payment', refBookingId = null) {
+export function addPayment(db, booking, amount, method, note = '', userId = null, kind = 'payment', refBookingId = null, invoiceId = null) {
   return tx(db, () => {
-    db.prepare('insert into payments (booking_id, amount, method, note, created_by, kind, ref_booking_id) values (?,?,?,?,?,?,?)').run(booking.id, amount, method, note, userId, kind, refBookingId);
+    db.prepare('insert into payments (booking_id, amount, method, note, created_by, kind, ref_booking_id, invoice_id) values (?,?,?,?,?,?,?,?)').run(booking.id, amount, method, note, userId, kind, refBookingId, invoiceId);
     return recalcPaid(db, booking.id);
   });
 }
 
 // Paid = payments minus refunds and transfers out, voided entries left out.
+// A deposit is security money: it is kept apart and never counts as payment.
+export const DEPOSIT_KINDS = "('deposit','deposit_return')";
 export function recalcPaid(db, bookingId) {
-  const sum = db.prepare('select coalesce(sum(amount),0) s from payments where booking_id = ? and voided = 0').get(bookingId).s;
+  const sum = db.prepare(`select coalesce(sum(amount),0) s from payments where booking_id = ? and voided = 0 and kind not in ${DEPOSIT_KINDS}`).get(bookingId).s;
   const total = db.prepare('select total from bookings where id = ?').get(bookingId).total;
   db.prepare('update bookings set paid_amount = ?, paid = ? where id = ?').run(sum, sum >= total ? 1 : 0, bookingId);
   return db.prepare('select * from bookings where id = ?').get(bookingId);

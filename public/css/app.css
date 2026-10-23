@@ -602,3 +602,22 @@ tr.we { background: #fbf6ea; }
 
 .quote li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .pay-list li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- v7: housekeeping, groups, deposit, invoices ---------- */
+.hk-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.hk { border: 1px solid var(--border); border-left: 6px solid #3aa76d; border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; }
+.hk--dirty { border-left-color: var(--accent); }
+.hk--repair { border-left-color: var(--danger); }
+.hk__room strong { font-size: 22px; margin-right: 8px; }
+.hk__state { display: grid; gap: 2px; }
+.roles-help { padding-left: 18px; margin: 0 0 12px; }
+.deposit { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
+.deposit h3 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* v7: split invoices */
+.invoice--split { border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); padding: 12px; margin-bottom: 12px; }
+.invoice__head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 1rem; margin: 0 0 8px; }
+.invoice__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 8px 0 0; }
+.invoice__foot form { display: inline; }
+.checks { border: 0; padding: 0; margin: 0; }
+.checks legend { font-weight: 600; margin-bottom: 4px; }

@@ -1,5 +1,6 @@
 import { html, raw, field } from './html.js';
-import { appLayout } from './layout.js';
+import { appLayout, ROLE_NAMES } from './layout.js';
+import { ROLES } from '../lib/auth.js';
 import { csrf } from './app.js';
 import { PROPERTY_TYPES } from '../lib/hotels.js';
 
@@ -94,16 +95,16 @@ export function settingsTeam({ req, hotel, users, msg, created }) {
   return page(req, hotel, msg, 'Сотрудники', html`
     ${created ? html`<div class="flash flash--success" role="status">Сотрудник добавлен. Временный пароль: <code>${created}</code> — передайте его сотруднику, он больше не будет показан.</div>` : ''}
     <section class="card"><h2 class="h3">Доступ к объекту «${hotel.name}»</h2>
-      <p class="muted">Владелец видит всё и меняет настройки. Администратор работает с бронями, шахматкой, ценами и номерами, но не меняет настройки и сотрудников.</p>
+      <ul class="muted roles-help">${ROLES.map(([, n, d]) => html`<li><strong>${n}</strong> — ${d}</li>`)}</ul>
       <div class="table-wrap" tabindex="0" role="region" aria-label="Сотрудники"><table class="table"><thead><tr><th scope="col">Имя</th><th scope="col">Почта</th><th scope="col">Роль</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
-      <tbody>${users.map((u) => html`<tr><td>${u.name}${u.id === req.user.id ? ' (вы)' : ''}</td><td>${u.email}</td><td>${u.role === 'owner' ? 'Владелец' : 'Администратор'}</td>
+      <tbody>${users.map((u) => html`<tr><td>${u.name}${u.id === req.user.id ? ' (вы)' : ''}</td><td>${u.email}</td><td>${(ROLES.find((r) => r[0] === u.role) || [u.role, u.role])[1]}</td>
         <td>${owner && u.id !== req.user.id ? html`<form method="post" action="/app/settings/team/${u.id}/remove" data-confirm="Закрыть доступ сотруднику ${u.name}?">${csrf(req)}<button class="linklike" type="submit">Закрыть доступ</button></form>` : ''}</td></tr>`)}</tbody></table></div>
     </section>
     ${owner ? html`<section class="card"><h2 class="h3">Добавить сотрудника</h2>
       <form class="form form--grid" method="post" action="/app/settings/team">${csrf(req)}
         ${field({ prefix: 'tm', name: 'name', label: 'Имя', attrs: 'required maxlength="80"' })}
         ${field({ prefix: 'tm', name: 'email', label: 'Почта для входа', type: 'email', attrs: 'required' })}
-        ${field({ prefix: 'tm', name: 'role', label: 'Роль', type: 'select', options: [['manager', 'Администратор'], ['owner', 'Владелец']] })}
+        ${field({ prefix: 'tm', name: 'role', label: 'Роль', type: 'select', value: 'manager', options: ROLES.map(([k, n]) => [k, n]) })}
         <div class="actions"><button class="btn btn--primary" type="submit">Добавить</button></div>
         <p class="muted span-all">Если у человека уже есть кабинет в ${'Stayra'}, он получит доступ к этому объекту в своём кабинете.</p>
       </form></section>` : ''}
@@ -118,7 +119,7 @@ export function settingsTeam({ req, hotel, users, msg, created }) {
 export function settingsProperties({ req, hotel, hotels, msg }) {
   return page(req, hotel, msg, 'Мои объекты', html`<section class="card"><h2 class="h3">Объекты, к которым у вас есть доступ</h2>
       <p class="muted">Каждый объект — отдельный кабинет со своими номерами, ценами, бронями и сотрудниками. Переключайтесь между ними в меню слева.</p>
-      <ul class="mini-list">${hotels.map((h) => html`<li><span><strong>${h.name}</strong> <small class="muted">${h.role === 'owner' ? 'владелец' : 'администратор'} · /h/${h.slug}</small></span>
+      <ul class="mini-list">${hotels.map((h) => html`<li><span><strong>${h.name}</strong> <small class="muted">${ROLE_NAMES[h.role] || h.role} · /h/${h.slug}</small></span>
         ${h.id === hotel.id ? html`<span class="badge badge--confirmed">открыт</span>` : html`<form method="post" action="/app/switch">${csrf(req)}<input type="hidden" name="hotel_id" value="${h.id}"><button class="btn btn--sm btn--secondary" type="submit">Открыть</button></form>`}</li>`)}</ul>
     </section>
     <section class="card"><h2 class="h3">Добавить объект</h2>

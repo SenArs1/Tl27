@@ -1,5 +1,6 @@
 import { tx } from '../db.js';
-import { BookingError, recalcPaid, addPayment, updateMoney, ratesMap, childGroups, extrasTotal } from './booking.js';
+import { shiftExtraKeys, findInvoice } from './invoices.js';
+import { BookingError, recalcPaid, addPayment, updateMoney, ratesMap, childGroups, extrasTotal, DEPOSIT_KINDS } from './booking.js';
 
 export const PURPOSES = [['', 'не указана'], ['tourism', 'отдых и туризм'], ['business', 'командировка'], ['treatment', 'лечение'], ['event', 'мероприятие'], ['transit', 'транзит'], ['other', 'другое']];
 export const TAG_COLORS = [['teal', 'бирюзовый'], ['violet', 'фиолетовый'], ['amber', 'янтарный'], ['rose', 'розовый'], ['blue', 'синий'], ['slate', 'серый']];
@@ -17,13 +18,16 @@ export function historyOf(db, bookingId) {
 const reload = (db, id) => db.prepare('select * from bookings where id = ?').get(id);
 
 // Money returned to the guest; never more than was paid.
-export function refund(db, b, amount, method, reason, user) {
+export function refund(db, b, amount, method, reason, user, invoiceId = null) {
   return tx(db, () => {
     const fresh = reload(db, b.id);
     if (!(amount > 0)) throw new BookingError('amount', 'Укажите сумму возврата');
     if (amount > fresh.paid_amount) throw new BookingError('amount', `Вернуть можно не больше оплаченного: ${fresh.paid_amount.toLocaleString('ru-RU')} ₽`);
+    const inv = invoiceId ? findInvoice(db, fresh, invoiceId) : null;
+    if (invoiceId && !inv) throw new BookingError('invoice', 'Счёт не найден');
+    if (inv && amount > inv.paid) throw new BookingError('amount', `По счёту ${inv.number} оплачено ${inv.paid.toLocaleString('ru-RU')} ₽`);
     if (String(reason || '').trim().length < 3) throw new BookingError('reason', 'Укажите причину возврата');
-    addPayment(db, fresh, -amount, method, reason, user ? user.id : null, 'refund');
+    addPayment(db, fresh, -amount, method, reason, user ? user.id : null, 'refund', null, inv ? inv.id : null);
     logEvent(db, fresh, user, 'Возврат', '', `${amount.toLocaleString('ru-RU')} ₽, ${reason}`);
     return reload(db, b.id);
   });
@@ -36,10 +40,12 @@ export function voidPayment(db, b, paymentId, reason, user) {
     if (!p) throw new BookingError('payment', 'Платёж не найден');
     if (p.voided) throw new BookingError('payment', 'Платёж уже аннулирован');
     if (p.kind === 'transfer_in' || p.kind === 'transfer_out') throw new BookingError('payment', 'Перенос оплаты отменяется обратным переносом');
+    if (p.kind === 'deposit_return') throw new BookingError('payment', 'Возврат залога не аннулируется — примите залог заново');
     if (String(reason || '').trim().length < 3) throw new BookingError('reason', 'Укажите причину');
     db.prepare('update payments set voided = 1, void_reason = ? where id = ?').run(reason, p.id);
     const after = recalcPaid(db, b.id);
     if (after.paid_amount < 0) throw new BookingError('payment', 'После аннулирования оплачено станет меньше нуля — сначала отмените возврат');
+    if (depositBalance(db, b.id) < 0) throw new BookingError('payment', 'Часть залога уже возвращена или удержана — аннулировать нельзя');
     logEvent(db, b, user, 'Платёж аннулирован', `${p.amount.toLocaleString('ru-RU')} ₽`, reason);
     return after;
   });
@@ -130,6 +136,7 @@ export function removeService(db, b, index, user) {
     const lines = JSON.parse(fresh.extras || '[]');
     if (!lines[index]) throw new BookingError('service', 'Услуга не найдена');
     const [gone] = lines.splice(index, 1);
+    shiftExtraKeys(db, fresh.id, index);
     logEvent(db, fresh, user, 'Удалена услуга', `${gone.name} × ${gone.qty}`, '');
     return writeExtras(db, fresh, lines);
   });
@@ -205,4 +212,44 @@ export function tracked(db, bookingId, user, prefix, fn) {
   const out = fn();
   logDiff(db, before, snapshot(db, bookingId), user, prefix);
   return out;
+}
+
+// ---------- deposit ----------
+export function depositBalance(db, bookingId) {
+  return db.prepare(`select coalesce(sum(amount),0) s from payments where booking_id = ? and voided = 0 and kind in ${DEPOSIT_KINDS}`).get(bookingId).s;
+}
+
+export function takeDeposit(db, b, amount, method, user) {
+  return tx(db, () => {
+    if (!(amount > 0)) throw new BookingError('amount', 'Укажите сумму залога');
+    addPayment(db, b, amount, method, 'Залог', user ? user.id : null, 'deposit');
+    logEvent(db, b, user, 'Принят залог', '', `${amount.toLocaleString('ru-RU')} ₽`);
+    return reload(db, b.id);
+  });
+}
+
+export function returnDeposit(db, b, amount, method, user) {
+  return tx(db, () => {
+    const bal = depositBalance(db, b.id);
+    if (!(amount > 0) || amount > bal) throw new BookingError('amount', `Вернуть можно до ${bal.toLocaleString('ru-RU')} ₽ залога`);
+    addPayment(db, b, -amount, method, 'Возврат залога', user ? user.id : null, 'deposit_return');
+    logEvent(db, b, user, 'Залог возвращён', '', `${amount.toLocaleString('ru-RU')} ₽`);
+    return reload(db, b.id);
+  });
+}
+
+// Keeps part of the deposit: towards the unpaid stay, or for damage (adds a charge to the bill).
+export function retainDeposit(db, b, amount, purpose, reason, user) {
+  return tx(db, () => {
+    const bal = depositBalance(db, b.id);
+    const fresh = reload(db, b.id);
+    if (!(amount > 0) || amount > bal) throw new BookingError('amount', `Удержать можно до ${bal.toLocaleString('ru-RU')} ₽ залога`);
+    if (String(reason || '').trim().length < 3) throw new BookingError('reason', 'Укажите причину удержания');
+    if (purpose === 'damage') addService(db, fresh, { name: `Возмещение ущерба: ${reason}`.slice(0, 80), price: amount, qty: 1 }, user);
+    else if (amount > fresh.total - fresh.paid_amount) throw new BookingError('amount', 'В счёт проживания можно удержать не больше долга по брони');
+    addPayment(db, fresh, -amount, 'cash', `Удержано из залога: ${reason}`, user ? user.id : null, 'deposit_return');
+    addPayment(db, fresh, amount, 'cash', `Из залога: ${reason}`, user ? user.id : null, 'payment');
+    logEvent(db, fresh, user, 'Удержано из залога', '', `${amount.toLocaleString('ru-RU')} ₽, ${reason}`);
+    return reload(db, b.id);
+  });
 }

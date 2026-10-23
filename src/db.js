@@ -168,6 +168,32 @@ create table if not exists booking_notes (
   created_at text not null default (datetime('now'))
 );
 create index if not exists booking_notes_hotel on booking_notes(hotel_id, done, due_at);
+-- Extra invoices of a booking for other payers; lines not listed stay on the main invoice.
+create table if not exists invoices (
+  id integer primary key,
+  booking_id integer not null references bookings(id) on delete cascade,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  number text not null,
+  payer_name text not null,
+  payer_inn text not null default '',
+  items text not null default '[]',
+  created_at text not null default (datetime('now'))
+);
+create index if not exists invoices_booking on invoices(booking_id);
+-- A group: several bookings of one organiser (a team, a wedding, a tour).
+create table if not exists booking_groups (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  code text not null unique,
+  name text not null,
+  contact_name text not null default '',
+  phone text not null default '',
+  email text not null default '',
+  customer_inn text not null default '',
+  comment text not null default '',
+  created_at text not null default (datetime('now'))
+);
+create index if not exists booking_groups_hotel on booking_groups(hotel_id, id);
 create table if not exists room_types (
   id integer primary key,
   hotel_id integer not null references hotels(id) on delete cascade,
@@ -307,7 +333,9 @@ const COLUMNS = {
     grid_days: 'integer not null default 14',
     placement_mode: "text not null default 'auto'",
   },
-  users: { is_platform_admin: 'integer not null default 0' },
+  // kind: housekeeping / investor on top of the stored owner/manager role.
+  users: { is_platform_admin: 'integer not null default 0', kind: "text not null default ''" },
+  user_hotels: { kind: "text not null default ''" },
   sessions: { hotel_id: 'integer' },
   room_types: { extra_beds: 'integer not null default 0' },
   rate_plans: {
@@ -324,6 +352,7 @@ const COLUMNS = {
     voided: 'integer not null default 0',
     void_reason: "text not null default ''",
     ref_booking_id: 'integer',
+    invoice_id: 'integer references invoices(id) on delete set null',
   },
   inventory: {
     cta: 'integer not null default 0',
@@ -338,6 +367,7 @@ const COLUMNS = {
     created_by: 'integer',
     channel_ref: 'text',
     children_ages: "text not null default '[]'",
+    group_id: 'integer references booking_groups(id) on delete set null',
     checked_in_at: 'text',
     checked_out_at: 'text',
     customer_name: "text not null default ''",

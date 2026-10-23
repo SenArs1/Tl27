@@ -35,19 +35,18 @@ export function confirmationDoc({ hotel, b, rooms, rate }) {
     <p class="consent">Ждём вас! Вопросы — по телефону ${hotel.phone || hotel.email}.</p>`);
 }
 
-export function invoiceDoc({ hotel, b }) {
-  const lines = [[`Проживание, ${nightsLabel(diffDays(b.checkin, b.checkout))} (${fmtDate(b.checkin)} — ${fmtDate(b.checkout)})`, 1, b.nights_total],
-    ...JSON.parse(b.extras || '[]').map((l) => [l.name, l.qty, l.sum]),
-    ...(b.tax_total ? [['Туристический налог', 1, b.tax_total]] : [])];
-  const debt = b.total - b.paid_amount;
-  return page(`Счёт ${b.code}`, hotel, html`<h1>Счёт на оплату по брони № ${b.code}</h1>
-    <table>${row('Плательщик', b.customer_name ? `${b.customer_name}${b.customer_inn ? `, ИНН ${b.customer_inn}` : ''}` : b.guest_name)}${row('Гость', b.guest_name)}</table>
+// One invoice of the booking: the whole bill, or the lines a given payer covers.
+export function invoiceDoc({ hotel, b, inv }) {
+  const period = `${nightsLabel(diffDays(b.checkin, b.checkout))} (${fmtDate(b.checkin)} — ${fmtDate(b.checkout)})`;
+  const debt = inv.total - inv.paid;
+  return page(`Счёт ${inv.number}`, hotel, html`<h1>Счёт на оплату № ${inv.number}</h1>
+    <table>${row('Плательщик', `${inv.payer_name}${inv.payer_inn ? `, ИНН ${inv.payer_inn}` : ''}`)}${row('Гость', b.guest_name)}${row('Бронь', `${b.code}, ${period}`)}</table>
     <h2 class="doc-h2">Состав</h2>
-    <table><thead><tr><th scope="col">Наименование</th><th scope="col">Кол-во</th><th scope="col">Сумма</th></tr></thead>
-      <tbody>${lines.map(([n, q, s]) => html`<tr><td>${n}</td><td>${q}</td><td>${rub(s)}</td></tr>`)}
-      <tr><th scope="row" colspan="2">Итого</th><td><strong>${rub(b.total)}</strong></td></tr>
-      <tr><th scope="row" colspan="2">Оплачено</th><td>${rub(b.paid_amount)}</td></tr>
-      <tr><th scope="row" colspan="2">К оплате</th><td><strong>${rub(Math.max(0, debt))}</strong></td></tr></tbody></table>
+    <table><thead><tr><th scope="col">Наименование</th><th scope="col">Сумма</th></tr></thead>
+      <tbody>${inv.lines.map((l) => html`<tr><td>${l.key === 'stay' ? `Проживание, ${period}` : l.name}</td><td>${rub(l.sum)}</td></tr>`)}
+      <tr><th scope="row">Итого</th><td><strong>${rub(inv.total)}</strong></td></tr>
+      <tr><th scope="row">Оплачено</th><td>${rub(inv.paid)}</td></tr>
+      <tr><th scope="row">К оплате</th><td><strong>${rub(Math.max(0, debt))}</strong></td></tr></tbody></table>
     <p class="consent">НДС не облагается, если иное не указано в реквизитах организации. Счёт действителен до даты заезда.</p>
     <p class="sign">Администратор ____________________</p>`);
 }
@@ -62,5 +61,21 @@ export function receiptDoc({ hotel, b, payments }) {
       <tr><th scope="row" colspan="3">Итого оплачено</th><td><strong>${rub(b.paid_amount)}</strong></td></tr>
       <tr><th scope="row" colspan="3">Стоимость брони</th><td>${rub(b.total)}</td></tr></tbody></table>
     <p class="consent">Справка не является кассовым чеком.</p>
+    <p class="sign">Администратор ____________________</p>`);
+}
+
+// One invoice for a whole group: a line per room booking.
+export function groupInvoiceDoc({ hotel, group, members, totals }) {
+  const live = members.filter((m) => !['cancelled', 'no_show'].includes(m.status));
+  return page(`Счёт ${group.code}`, hotel, html`<h1>Счёт на оплату № ${group.code}</h1>
+    <table>${row('Плательщик', `${group.name}${group.customer_inn ? `, ИНН ${group.customer_inn}` : ''}`)}${row('Контакт', `${group.contact_name}, ${group.phone}`)}
+      ${row('Даты', totals.from ? `${fmtDate(totals.from)} — ${fmtDate(totals.to)}` : '')}</table>
+    <h2 class="doc-h2">Состав</h2>
+    <table><thead><tr><th scope="col">Бронь</th><th scope="col">Проживание</th><th scope="col">Сумма</th></tr></thead>
+      <tbody>${live.map((m) => html`<tr><td>${m.code}</td><td>${m.room_name}${m.room_number ? `, № ${m.room_number}` : ''}, ${nightsLabel(diffDays(m.checkin, m.checkout))}, ${m.adults} взр.</td><td>${rub(m.total)}</td></tr>`)}
+      <tr><th scope="row" colspan="2">Итого</th><td><strong>${rub(totals.total)}</strong></td></tr>
+      <tr><th scope="row" colspan="2">Оплачено</th><td>${rub(totals.paid)}</td></tr>
+      <tr><th scope="row" colspan="2">К оплате</th><td><strong>${rub(Math.max(0, totals.debt))}</strong></td></tr></tbody></table>
+    <p class="consent">НДС не облагается, если иное не указано в реквизитах организации.</p>
     <p class="sign">Администратор ____________________</p>`);
 }

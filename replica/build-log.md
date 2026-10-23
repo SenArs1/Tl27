@@ -116,3 +116,12 @@ Bugs found by tests in v6 and fixed:
 | B18 | S2 | on a phone the two-column card blocks (payments) widened the page to 474px, buttons were unreachable | `minmax(0, 1fr)` for `.app-cols`, line wrapping |
 
 Tests: 54 unit/HTTP (+6: history, refund/voiding, transfer, price/discount/services, tags, card HTTP and isolation), 43 e2e + 3 deliberate skips.
+
+## Version 7 (roles, deposit, split invoices, group bookings, 2026-10-23)
+
+- **Housekeeping and investor roles.** Stored as `kind` on top of owner/manager, so old databases keep their `role` check. Housekeeping staff see only the cleaning board (`/app/housekeeping`): rooms, today's arrivals and departures, the cleaning status. No names, phones or money. Investors see the summary and the occupancy and sales reports, read-only. The tax report lists guests, so investors don't get it. The menu is filtered per role, and `roleGuard` enforces the same rules on the server.
+- **Deposit.** Kept apart from the paid amount and does not reduce the debt. It can be returned, or kept towards the unpaid stay or for damage; damage adds a line to the bill. The checkout message reminds staff about a deposit that hasn't been returned.
+- **Several invoices per booking.** Bill lines (stay, each service, tax) move to an invoice for another payer, and whatever no payer takes stays on the main invoice. Payments and refunds can be tied to a specific invoice. Each invoice can be printed on its own. An invoice with payments can't be deleted, and invoice lines stay correct when a service is removed.
+- **Group bookings** (`/app/groups`). One form creates N bookings in one transaction: if a single room fails, nothing is created. One payment from the organiser is spread over the rooms' debts, earliest arrival first. Rooms can be added to or removed from a group, all not-yet-arrived rooms can be cancelled at once, and the whole group has one printable invoice. The group code shows on chessboard bars, in chessboard search, in the journal and in the booking card.
+
+Tests: 58 unit/HTTP (+4: deposit, split invoices, groups, roles over HTTP with groups and invoices), 47 e2e + 3 deliberate skips (+2 specs on desktop and mobile with axe).

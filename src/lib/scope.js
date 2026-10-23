@@ -23,10 +23,11 @@ export function scope(db, hotelId) {
     promos: all('select * from promo_codes where hotel_id = ? order by id'),
     promo: one('select * from promo_codes where id = ? and hotel_id = ?'),
     booking: one('select * from bookings where id = ? and hotel_id = ?'),
+    bookingGroup: one('select * from booking_groups where id = ? and hotel_id = ?'),
     channels: all('select * from channels where hotel_id = ? order by connected desc, id'),
     channel: one('select * from channels where id = ? and hotel_id = ?'),
-    users: () => db.prepare(`select id, name, email, role from users where hotel_id = ?
-      union select u.id, u.name, u.email, uh.role from user_hotels uh join users u on u.id = uh.user_id where uh.hotel_id = ? order by 2`).all(hotelId, hotelId),
+    users: () => db.prepare(`select id, name, email, coalesce(nullif(kind, ''), role) as role from users where hotel_id = ?
+      union select u.id, u.name, u.email, coalesce(nullif(uh.kind, ''), uh.role) from user_hotels uh join users u on u.id = uh.user_id where uh.hotel_id = ? order by 2`).all(hotelId, hotelId),
   };
 }
 
@@ -34,5 +35,6 @@ export function scope(db, hotelId) {
 // the shape most lists need. unassigned > 0 means some part of the stay has no room.
 export const BOOKING_LIST = `select b.*, t.name as room_name,
   (select group_concat(number, ' → ') from (select r.number from stay_segments s join rooms r on r.id = s.room_id where s.booking_id = b.id order by s.start)) as room_number,
-  (select count(*) from stay_segments s where s.booking_id = b.id and s.room_id is null) as unassigned
+  (select count(*) from stay_segments s where s.booking_id = b.id and s.room_id is null) as unassigned,
+  (select code from booking_groups g where g.id = b.group_id) as group_code
   from bookings b join room_types t on t.id = b.room_type_id where b.hotel_id = ?`;

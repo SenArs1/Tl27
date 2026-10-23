@@ -31,7 +31,7 @@ export function reportsPage({ req, hotel, tab, from, to, data, channels, msg }) 
     req,
     hotel,
     msg,
-    body: html`<nav class="subnav" aria-label="Отчёты">${TABS.map(([k, l]) => html`<a href="${q(k)}" ${k === tab ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>
+    body: html`<nav class="subnav" aria-label="Отчёты">${TABS.filter(([k]) => req.user.role !== 'investor' || ['occupancy', 'sales'].includes(k)).map(([k, l]) => html`<a href="${q(k)}" ${k === tab ? raw('aria-current="page"') : ''}>${l}</a>`)}</nav>
       ${period}${body}`,
   });
 }

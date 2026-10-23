@@ -53,18 +53,18 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
     const src = sourceKind(b.source);
     const part = b.is_first && b.is_last ? '' : `, часть ${fmtDate(b.start)} — ${fmtDate(b.end)}`;
     const btags = b.tags || [];
-    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}${part}, ${STATUS[b.status] || b.status}, ${sourceShort(b.source, chName)}${debt > 0 ? `, к оплате ${rub(debt)}` : ''}${overdue ? (b.status === 'confirmed' ? ', заезд не оформлен' : ', выезд не оформлен') : ''}${btags.length ? `, теги: ${btags.map((x) => x.name).join(', ')}` : ''}`;
+    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}${part}, ${STATUS[b.status] || b.status}, ${sourceShort(b.source, chName)}${debt > 0 ? `, к оплате ${rub(debt)}` : ''}${overdue ? (b.status === 'confirmed' ? ', заезд не оформлен' : ', выезд не оформлен') : ''}${btags.length ? `, теги: ${btags.map((x) => x.name).join(', ')}` : ''}${b.group_code ? `, группа ${b.group_code}` : ''}`;
     // Edges can be dragged to change dates: check-in only before arrival, check-out until departure.
     const left = b.is_first && b.status === 'confirmed' && s >= 0;
     const right = b.is_last && ['confirmed', 'checked_in'].includes(b.status) && e <= days;
     const movable = ['confirmed', 'checked_in'].includes(b.status);
     return html`<a class="chess__bar chess__bar--${b.status} src-${src} ${overdue ? 'is-overdue' : ''} ${s < 0 ? 'cut-l' : ''} ${e > days ? 'cut-r' : ''} ${b.is_first ? '' : 'cont-l'} ${b.is_last ? '' : 'cont-r'}" style="grid-column:${start} / ${end}"
       href="/app/bookings/${b.id}" draggable="${movable ? 'true' : 'false'}" data-booking="${b.id}" data-segment="${b.segment_id}" data-checkin="${b.checkin}" data-checkout="${b.checkout}"
-      data-status="${b.status}" data-src="${src}" data-pay="${payKind(b)}" data-tag="${btags.map((x) => x.id).join(' ')}" data-whole="${b.is_first && b.is_last ? '1' : '0'}" data-find="${`${b.guest_name} ${b.code} ${b.guest_phone} ${b.channel_ref || ''}`.toLowerCase()}"
+      data-status="${b.status}" data-src="${src}" data-pay="${payKind(b)}" data-tag="${btags.map((x) => x.id).join(' ')}" data-whole="${b.is_first && b.is_last ? '1' : '0'}" data-find="${`${b.guest_name} ${b.code} ${b.guest_phone} ${b.channel_ref || ''} ${b.group_code || ''}`.toLowerCase()}"
       title="${label}" aria-label="${label}">
       ${btags.length ? html`<span class="chess__tagmark tag--${btags[0].color}" aria-hidden="true"></span>` : ''}
       ${left ? html`<span class="chess__handle chess__handle--l" data-edge="checkin" draggable="false" title="Потяните, чтобы изменить дату заезда"></span>` : ''}
-      ${debt > 0 ? html`<span class="chess__debt" aria-hidden="true">₽</span>` : ''}<span class="chess__guest">${b.is_first ? '' : '→ '}${b.guest_name}</span><small>${b.adults + b.children} г. · ${sourceShort(b.source, chName)}</small>
+      ${debt > 0 ? html`<span class="chess__debt" aria-hidden="true">₽</span>` : ''}<span class="chess__guest">${b.is_first ? '' : '→ '}${b.guest_name}</span><small>${b.group_code ? `${b.group_code} · ` : ''}${b.adults + b.children} г. · ${sourceShort(b.source, chName)}</small>
       ${right ? html`<span class="chess__handle chess__handle--r" data-edge="checkout" draggable="false" title="Потяните, чтобы изменить дату выезда"></span>` : ''}</a>`;
   };
 

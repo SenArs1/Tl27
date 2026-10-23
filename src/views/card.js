@@ -14,7 +14,7 @@ export const TABS = [
   ['notes', 'Заметки'],
   ['history', 'История'],
 ];
-const KIND = { payment: 'оплата', refund: 'возврат', transfer_in: 'перенос из другой брони', transfer_out: 'перенос в другую бронь' };
+const KIND = { payment: 'оплата', refund: 'возврат', transfer_in: 'перенос из другой брони', transfer_out: 'перенос в другую бронь', deposit: 'залог', deposit_return: 'возврат/удержание залога' };
 const methodName = (m) => (PAY_METHODS.find((x) => x[0] === m) || [m, m === 'transfer' ? 'перевод' : m])[1];
 
 export function tagChips(tags) {
@@ -48,7 +48,7 @@ export function bookingCard(p) {
       <div class="card-head__main">
         <h2 class="h3">${b.guest_name} ${statusBadge(b.status)} ${tagChips(tags.filter((t) => p.tagIds.includes(t.id)))}</h2>
         <p class="muted">${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))} ·
-          ${segments.map((sg, i) => html`${i ? ' → ' : ''}${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">без номера</span>`}`)} · ${rate ? rate.name : ''} · ${sourceName(b.source, channels)}</p>
+          ${segments.map((sg, i) => html`${i ? ' → ' : ''}${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">без номера</span>`}`)} · ${rate ? rate.name : ''} · ${sourceName(b.source, channels)}${p.group ? html` · группа <a href="/app/groups/${p.group.id}">${p.group.name}</a>` : ''}</p>
       </div>
       <div class="card-head__money"><span>Итого ${rub(b.total)}</span>${debt > 0 ? html`<strong class="debt">к оплате ${rub(debt)}</strong>` : html`<strong class="paid">оплачено</strong>`}</div>
       ${next.length ? html`<div class="actions">${next.map(([s, label]) => html`<form method="post" action="/app/bookings/${b.id}/status" ${s === 'cancelled' ? raw('data-confirm="Отменить бронь и вернуть номера в продажу?"') : s === 'no_show' ? raw('data-confirm="Отметить незаезд? Номера вернутся в продажу."') : ''}>${csrf(req)}<input type="hidden" name="status" value="${s}"><input type="hidden" name="back" value="${here}"><button class="btn ${s === 'cancelled' ? 'btn--danger' : s === 'no_show' ? 'btn--ghost' : 'btn--primary'}" type="submit">${label}</button></form>`)}</div>` : ''}
@@ -141,26 +141,41 @@ function stayTab(p, here) {
 }
 
 function paymentsTab(p, here) {
-  const { req, b, payments } = p;
+  const { req, b, payments, invoices } = p;
   const debt = b.total - b.paid_amount;
   const live = !['cancelled', 'no_show'].includes(b.status);
-  const lines = JSON.parse(b.extras || '[]');
+  const split = invoices.length > 1;
+  const invOpts = invoices.map((i) => [i.id || 'main', `${i.number} — ${i.payer_name}${i.debt > 0 ? `, долг ${i.debt.toLocaleString('ru-RU')} ₽` : ''}`]);
+  const firstDebt = invoices.find((i) => i.debt > 0);
   return html`<div class="app-cols">
-    <section class="card"><h2 class="h3">Счёт</h2>
-      <ul class="quote">
-        <li><span>Проживание</span><span>${rub(b.nights_total)}</span></li>
-        ${lines.map((e) => html`<li><span>${e.name} × ${e.qty}</span><span>${rub(e.sum)}</span></li>`)}
-        ${b.tax_total ? html`<li><span>Туристический налог</span><span>${rub(b.tax_total)}</span></li>` : ''}
-      </ul>
-      <p class="quote__total"><span>Итого</span><strong>${rub(b.total)}</strong></p>
+    <section class="card"><h2 class="h3">${split ? 'Счета' : 'Счёт'}</h2>
+      ${invoices.map((inv) => html`<div class="invoice${split ? ' invoice--split' : ''}">
+        ${split ? html`<h3 class="invoice__head"><span>№ ${inv.number}${inv.main ? ' · основной' : ''}</span><small class="muted">${inv.payer_name}${inv.payer_inn ? `, ИНН ${inv.payer_inn}` : ''}</small></h3>` : ''}
+        <ul class="quote">${inv.lines.map((l) => html`<li><span>${l.name}</span><span>${rub(l.sum)}</span></li>`)}</ul>
+        ${split ? html`<p class="quote__total"><span>По счёту</span><strong>${rub(inv.total)}</strong></p>
+          <p class="quote__total"><span>Оплачено</span><strong>${rub(inv.paid)}</strong></p>
+          <p class="invoice__foot">${inv.debt > 0 ? html`<span class="badge badge--warn">к оплате ${rub(inv.debt)}</span>` : inv.debt < 0 ? html`<span class="badge badge--warn">переплата ${rub(-inv.debt)}</span>` : html`<span class="badge badge--confirmed">оплачен</span>`}
+            <a class="linklike" href="/app/bookings/${b.id}/doc/invoice?inv=${inv.id || 'main'}" target="_blank" rel="noopener">Печать счёта</a>
+            ${!inv.main ? html`<form method="post" action="/app/bookings/${b.id}/invoices/${inv.id}/delete" data-confirm="Удалить счёт ${inv.number}? Строки вернутся на основной счёт.">${csrf(req)}<input type="hidden" name="back" value="${here}"><button class="linklike" type="submit">удалить счёт</button></form>` : ''}</p>` : ''}
+      </div>`)}
+      <p class="quote__total"><span>Итого по брони</span><strong>${rub(b.total)}</strong></p>
       <p class="quote__total"><span>Оплачено</span><strong>${rub(b.paid_amount)}</strong></p>
       ${debt > 0 ? html`<p class="quote__total quote__debt"><span>К оплате</span><strong>${rub(debt)}</strong></p>`
         : debt < 0 ? html`<p class="quote__total quote__debt"><span>Переплата — оформите возврат или перенос</span><strong>${rub(-debt)}</strong></p>`
         : html`<p class="badge badge--confirmed">Оплачено полностью</p>`}
       ${live && debt > 0 ? html`<form class="form form--inline" method="post" action="/app/bookings/${b.id}/pay">${csrf(req)}<input type="hidden" name="back" value="${here}">
-        ${field({ prefix: 'pay', name: 'amount', label: 'Сумма, ₽', type: 'number', value: debt, attrs: `min="1" max="${debt}" required` })}
+        ${split ? field({ prefix: 'pay', name: 'invoice', label: 'По счёту', type: 'select', value: firstDebt ? firstDebt.id || 'main' : 'main', options: invOpts }) : ''}
+        ${field({ prefix: 'pay', name: 'amount', label: 'Сумма, ₽', type: 'number', value: split && firstDebt ? Math.min(firstDebt.debt, debt) : debt, attrs: `min="1" max="${debt}" required` })}
         ${field({ prefix: 'pay', name: 'method', label: 'Способ', type: 'select', value: 'card', options: PAY_METHODS.filter((m) => m[0] !== 'online') })}
         <button class="btn btn--primary" type="submit">Принять оплату</button></form>` : ''}
+      ${live && invoices[0].lines.length > 1 ? html`<details class="add"><summary class="btn btn--secondary">Разделить счёт</summary>
+        <form class="form form--grid" method="post" action="/app/bookings/${b.id}/invoices">${csrf(req)}<input type="hidden" name="back" value="${here}">
+          <fieldset class="span-all checks"><legend>Что оплатит другой плательщик</legend>
+            ${invoices[0].lines.map((l) => html`<label class="check"><input type="checkbox" name="items" value="${l.key}"> ${l.name} — ${rub(l.sum)}</label>`)}</fieldset>
+          ${field({ prefix: 'iv', name: 'payer_name', label: 'Плательщик', attrs: 'required minlength="2" maxlength="120" placeholder="например, ООО «Ромашка» или имя гостя"' })}
+          ${field({ prefix: 'iv', name: 'payer_inn', label: 'ИНН (для организации)', attrs: 'inputmode="numeric" maxlength="12"' })}
+          <p class="muted span-all">Например, проживание оплачивает компания по безналу, а мини-бар и парковку — гость на стойке. Остальные строки остаются на основном счёте.</p>
+          <div class="actions span-all"><button class="btn btn--primary" type="submit">Выставить счёт</button><a class="btn btn--ghost" href="${here}" data-close-details>Отмена</a></div></form></details>` : ''}
     </section>
     <section class="card"><h2 class="h3">Платежи</h2>
       ${payments.length ? html`<ul class="pay-list">${payments.map((x) => html`<li class="${x.voided ? 'is-void' : ''}">
@@ -169,9 +184,11 @@ function paymentsTab(p, here) {
         ${!x.voided && ['payment', 'refund'].includes(x.kind) ? html`<details class="row-edit"><summary>Аннулировать</summary><form class="form form--inline" method="post" action="/app/bookings/${b.id}/payments/${x.id}/void">${csrf(req)}<input type="hidden" name="back" value="${here}">
           ${field({ prefix: `vd${x.id}`, name: 'reason', label: 'Причина', attrs: 'required minlength="3" placeholder="ошибочный платёж"' })}<button class="btn btn--danger btn--sm" type="submit">Аннулировать</button></form></details>` : ''}</span></li>`)}</ul>`
         : html`<p class="muted">Платежей ещё не было.</p>`}
+      ${depositBlock(p, here)}
       ${b.paid_amount > 0 ? html`<details class="add"><summary class="btn btn--secondary">Возврат</summary>
         <form class="form form--grid" method="post" action="/app/bookings/${b.id}/refund">${csrf(req)}<input type="hidden" name="back" value="${here}">
           ${field({ prefix: 'rf', name: 'amount', label: 'Сумма возврата, ₽', type: 'number', value: Math.max(0, Math.min(b.paid_amount, -debt)) || '', attrs: `min="1" max="${b.paid_amount}" required` })}
+          ${split ? field({ prefix: 'rf', name: 'invoice', label: 'По счёту', type: 'select', options: invOpts }) : ''}
           ${field({ prefix: 'rf', name: 'method', label: 'Как вернуть', type: 'select', value: 'cash', options: PAY_METHODS.filter((m) => m[0] !== 'online') })}
           ${field({ prefix: 'rf', name: 'reason', label: 'Причина', attrs: 'required minlength="3" placeholder="например, ранний выезд"' })}
           <div class="actions span-all"><button class="btn btn--primary" type="submit">Оформить возврат</button><a class="btn btn--ghost" href="${here}" data-close-details>Отмена</a></div></form></details>
@@ -190,7 +207,8 @@ function docsTab(p) {
   return html`<section class="card"><h2 class="h3">Документы для печати</h2>
     <ul class="doc-list">
       ${doc(`/app/bookings/${b.id}/doc/confirmation`, 'Подтверждение бронирования', 'Даты, номер, тариф, сумма и условия — для гостя')}
-      ${doc(`/app/bookings/${b.id}/doc/invoice`, 'Счёт на оплату', 'Проживание, услуги, налог; заказчик, если указан')}
+      ${p.invoices.length > 1 ? p.invoices.map((i) => doc(`/app/bookings/${b.id}/doc/invoice?inv=${i.id || 'main'}`, `Счёт № ${i.number}`, `${i.payer_name}: ${i.lines.map((l) => l.name).join(', ')}`))
+        : doc(`/app/bookings/${b.id}/doc/invoice`, 'Счёт на оплату', 'Проживание, услуги, налог; заказчик, если указан')}
       ${doc(`/app/bookings/${b.id}/doc/receipt`, 'Справка об оплате', 'Все принятые платежи и возвраты по брони')}
       ${guestList.map((g) => doc(`/app/bookings/${b.id}/guests/${g.id}/card`, `Анкета гостя: ${g.last_name} ${g.first_name}`, 'Для подписи при заселении'))}
     </ul>
@@ -224,3 +242,30 @@ function historyTab(p) {
 }
 
 export { TAG_COLORS };
+
+// Deposit: security money held apart from the bill.
+function depositBlock(p, here) {
+  const { req, b, deposit } = p;
+  const live = !['cancelled', 'no_show'].includes(b.status);
+  const opts = PAY_METHODS.filter((m) => m[0] !== 'online');
+  return html`<div class="deposit">
+    <h3 class="h3">Залог ${deposit > 0 ? html`<span class="badge badge--warn">на руках ${rub(deposit)}</span>` : html`<small class="muted">не принят</small>`}</h3>
+    <p class="muted">Залог хранится отдельно от оплаты и не уменьшает долг. При выезде верните его или удержите — в счёт проживания или за ущерб.</p>
+    ${live ? html`<details class="add"><summary class="btn btn--secondary">Принять залог</summary>
+      <form class="form form--inline" method="post" action="/app/bookings/${b.id}/deposit">${csrf(req)}<input type="hidden" name="back" value="${here}"><input type="hidden" name="op" value="take">
+        ${field({ prefix: 'dp', name: 'amount', label: 'Сумма, ₽', type: 'number', attrs: 'min="1" required' })}
+        ${field({ prefix: 'dp', name: 'method', label: 'Способ', type: 'select', value: 'cash', options: opts })}
+        <button class="btn btn--primary" type="submit">Принять</button></form></details>` : ''}
+    ${deposit > 0 ? html`<details class="add"><summary class="btn btn--secondary">Вернуть залог</summary>
+      <form class="form form--inline" method="post" action="/app/bookings/${b.id}/deposit">${csrf(req)}<input type="hidden" name="back" value="${here}"><input type="hidden" name="op" value="return">
+        ${field({ prefix: 'dr', name: 'amount', label: 'Сумма, ₽', type: 'number', value: deposit, attrs: `min="1" max="${deposit}" required` })}
+        ${field({ prefix: 'dr', name: 'method', label: 'Способ', type: 'select', value: 'cash', options: opts })}
+        <button class="btn btn--primary" type="submit">Вернуть</button></form></details>
+    <details class="add"><summary class="btn btn--secondary">Удержать из залога</summary>
+      <form class="form form--grid" method="post" action="/app/bookings/${b.id}/deposit">${csrf(req)}<input type="hidden" name="back" value="${here}"><input type="hidden" name="op" value="retain">
+        ${field({ prefix: 'dh', name: 'amount', label: 'Сумма, ₽', type: 'number', attrs: `min="1" max="${deposit}" required` })}
+        ${field({ prefix: 'dh', name: 'purpose', label: 'За что', type: 'select', options: [['debt', 'в счёт оплаты проживания'], ['damage', 'возмещение ущерба (добавит строку в счёт)']] })}
+        ${field({ prefix: 'dh', name: 'reason', label: 'Причина', attrs: 'required minlength="3" placeholder="например, разбит стакан"' })}
+        <div class="actions span-all"><button class="btn btn--primary" type="submit">Удержать</button></div></form></details>` : ''}
+  </div>`;
+}

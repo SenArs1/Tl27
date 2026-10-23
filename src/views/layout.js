@@ -92,16 +92,21 @@ export function engineLayout({ title, hotel, body }) {
 </body></html>`.value;
 }
 
+// [href, icon, label, roles that see it]
+const STAFF = ['owner', 'manager'];
 const APP_NAV = [
-  ['/app', 'home', 'Сводка'],
-  ['/app/chess', 'grid', 'Шахматка'],
-  ['/app/bookings', 'list', 'Журнал броней'],
-  ['/app/prices', 'calendar', 'Цены и наличие'],
-  ['/app/rooms', 'bed', 'Номера и тарифы'],
-  ['/app/channels', 'share', 'Каналы продаж'],
-  ['/app/reports', 'report', 'Отчёты'],
-  ['/app/settings', 'settings', 'Настройки'],
+  ['/app', 'home', 'Сводка', [...STAFF, 'investor']],
+  ['/app/chess', 'grid', 'Шахматка', STAFF],
+  ['/app/bookings', 'list', 'Журнал броней', STAFF],
+  ['/app/groups', 'users', 'Группы', STAFF],
+  ['/app/housekeeping', 'check', 'Уборка', [...STAFF, 'housekeeping']],
+  ['/app/prices', 'calendar', 'Цены и наличие', STAFF],
+  ['/app/rooms', 'bed', 'Номера и тарифы', STAFF],
+  ['/app/channels', 'share', 'Каналы продаж', STAFF],
+  ['/app/reports', 'report', 'Отчёты', [...STAFF, 'investor']],
+  ['/app/settings', 'settings', 'Настройки', STAFF],
 ];
+export const ROLE_NAMES = { owner: 'владелец', manager: 'администратор', housekeeping: 'горничная', investor: 'инвестор' };
 
 export function appLayout({ title, req, hotel, body, msg, wide = false }) {
   const path = req.path === '/' ? req.baseUrl : req.baseUrl + req.path;
@@ -121,7 +126,7 @@ export function appLayout({ title, req, hotel, body, msg, wide = false }) {
         </form>`
       : html`<p class="app-hotel">${hotel.name}</p>`}
     <nav aria-label="Разделы кабинета">
-      ${APP_NAV.map(([href, ic, label]) => {
+      ${APP_NAV.filter((x) => x[3].includes(req.user.role)).map(([href, ic, label]) => {
         const active = href === '/app' ? path === '/app' || path === '/app/' : path.startsWith(href);
         return html`<a href="${href}" ${active ? raw('aria-current="page"') : ''}>${icon(ic, 20)}<span>${label}</span></a>`;
       })}
@@ -136,7 +141,7 @@ export function appLayout({ title, req, hotel, body, msg, wide = false }) {
     <header class="app-top">
       <button class="burger burger--app" type="button" aria-expanded="false" aria-controls="app-side" data-toggle="app-side">${icon('menu')}<span class="sr-only">Меню</span></button>
       <h1>${title}</h1>
-      <span class="app-user">${req.user.name} · ${req.user.role === 'owner' ? 'владелец' : 'администратор'}</span>
+      <span class="app-user">${req.user.name} · ${ROLE_NAMES[req.user.role] || req.user.role}</span>
     </header>
     <main id="main" class="app-content${wide ? ' app-content--wide' : ''}" data-csrf="${req.session.csrf}">${flash(msg)}${body}</main>
   </div>

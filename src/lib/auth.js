@@ -44,16 +44,16 @@ export function clearCookie() {
 
 // Hotels a user may open: the home hotel plus any granted through user_hotels.
 export function userHotels(db, userId) {
-  return db.prepare(`select h.id, h.name, h.slug, u.role from users u join hotels h on h.id = u.hotel_id where u.id = ?
-    union select h.id, h.name, h.slug, uh.role from user_hotels uh join hotels h on h.id = uh.hotel_id where uh.user_id = ?
+  return db.prepare(`select h.id, h.name, h.slug, coalesce(nullif(u.kind, ''), u.role) as role from users u join hotels h on h.id = u.hotel_id where u.id = ?
+    union select h.id, h.name, h.slug, coalesce(nullif(uh.kind, ''), uh.role) from user_hotels uh join hotels h on h.id = uh.hotel_id where uh.user_id = ?
     order by 2`).all(userId, userId);
 }
 
 // Express middleware: attaches req.user (scoped to the session's current hotel) and req.session.
 export function loadUser(db) {
-  const q = db.prepare(`select s.id as sid, s.csrf, s.expires_at, s.hotel_id as current_hotel, u.id, u.hotel_id, u.email, u.name, u.role, u.is_platform_admin
+  const q = db.prepare(`select s.id as sid, s.csrf, s.expires_at, s.hotel_id as current_hotel, u.id, u.hotel_id, u.email, u.name, coalesce(nullif(u.kind, ''), u.role) as role, u.is_platform_admin
     from sessions s join users u on u.id = s.user_id where s.id = ?`);
-  const grant = db.prepare('select role from user_hotels where user_id = ? and hotel_id = ?');
+  const grant = db.prepare("select coalesce(nullif(kind, ''), role) as role from user_hotels where user_id = ? and hotel_id = ?");
   return (req, _res, next) => {
     const sid = parseCookies(req.headers.cookie)[COOKIE];
     if (sid) {
@@ -94,4 +94,25 @@ export function requirePlatform(req, res, next) {
   if (!req.user) return res.redirect(`/app/login?next=${encodeURIComponent(req.originalUrl)}`);
   if (req.user.platform) return next();
   res.status(403).send('Раздел для команды платформы.');
+}
+
+export const ROLES = [
+  ['owner', 'Владелец', 'всё, включая настройки и сотрудников'],
+  ['manager', 'Администратор', 'брони, шахматка, цены, номера, отчёты; без настроек и сотрудников'],
+  ['housekeeping', 'Горничная', 'только уборка номеров; не видит гостей и деньги'],
+  ['investor', 'Инвестор', 'только сводка, загрузка, доход и продажи; ничего не меняет, не видит гостей'],
+];
+
+// What each limited role may open. Owner and manager are handled by requireOwner.
+const LIMITED = {
+  housekeeping: (req) => req.path.startsWith('/housekeeping') || ['/logout', '/switch'].includes(req.path),
+  investor: (req) => (req.method === 'GET' && (req.path === '/' || (req.path === '/reports' && ['', 'occupancy', 'sales'].includes(String(req.query.tab || '')))))
+    || (req.method === 'POST' && ['/logout', '/switch'].includes(req.path)),
+};
+
+export function roleGuard(req, res, next) {
+  const allowed = LIMITED[req.user.role];
+  if (!allowed || allowed(req)) return next();
+  if (req.method === 'GET' && req.user.role === 'housekeeping') return res.redirect('/app/housekeeping');
+  res.status(403).send('Этот раздел недоступен для вашей роли. Обратитесь к владельцу объекта.');
 }
