@@ -140,11 +140,12 @@ test('chessboard: move by drag (JSON), check-in needs a room, checkout makes the
   const rate = ctx.db.prepare('select * from rate_plans where hotel_id = 1 order by id').get();
   const today = new Date().toISOString().slice(0, 10);
   const b = createBooking(ctx.db, hotel, { query: { checkin: today, checkout: stay(1).checkin, adults: 2, children: 0, promo: '' }, roomId: type.id, rateId: rate.id, guest: { name: 'Перенос Тест', email: 'm@example.com', phone: '+79000000003' }, staff: true });
-  const target = ctx.db.prepare('select * from rooms where room_type_id = ? and id != ? order by sort desc').get(type.id, b.room_id);
+  const roomIdOf = (id) => ctx.db.prepare('select room_id from stay_segments where booking_id = ? order by start').get(id).room_id;
+  const target = ctx.db.prepare('select * from rooms where room_type_id = ? and id != ? order by sort desc').get(type.id, roomIdOf(b.id));
   const json = { 'content-type': 'application/json', accept: 'application/json', 'x-csrf-token': a.csrf };
   const r = await post(`/app/bookings/${b.id}/move`, a.cookie, JSON.stringify({ room_id: target.id }), json);
   assert.equal(r.status, 200);
-  assert.equal(ctx.db.prepare('select room_id from bookings where id = ?').get(b.id).room_id, target.id);
+  assert.equal(roomIdOf(b.id), target.id);
   // unassign, then check-in is refused
   await post(`/app/bookings/${b.id}/move`, a.cookie, JSON.stringify({ room_id: '' }), json);
   const ci = await post(`/app/bookings/${b.id}/status`, a.cookie, form({ _csrf: a.csrf, status: 'checked_in' }));

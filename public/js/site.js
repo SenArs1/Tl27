@@ -90,7 +90,7 @@
   }
 
   // Checkout: live total with extras, block double submit
-  const checkout = $('[data-checkout]');
+  const checkout = $('[data-checkout-form]');
   if (checkout) {
     const sum = $('[data-summary]');
     const grand = $('[data-grand]');
@@ -141,9 +141,10 @@
   if (chess) {
     const csrfToken = $('[data-csrf]').dataset.csrf;
     let dragged = null;
+    let resizing = null;
     chess.addEventListener('dragstart', (e) => {
       const bar = e.target.closest('[data-booking]');
-      if (!bar) return;
+      if (!bar || resizing) { e.preventDefault(); return; }
       dragged = bar;
       bar.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -168,17 +169,69 @@
       const id = dragged.dataset.booking;
       const room = row.dataset.room === '0' ? '' : row.dataset.room;
       if (dragged.parentElement === row) return;
-      const r = await fetch(`/app/bookings/${id}/move`, {
+      send(`/app/bookings/${id}/move`, { room_id: room, segment_id: dragged.dataset.segment }, 'Не удалось переселить');
+    });
+
+    const send = async (url, body, fallback) => {
+      const r = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json', 'x-csrf-token': csrfToken },
-        body: JSON.stringify({ room_id: room }),
+        body: JSON.stringify(body),
       });
-      const j = await r.json().catch(() => ({ error: 'Не удалось переселить' }));
-      const url = new URL(location.href);
-      url.searchParams.set('m', j.message || j.error);
-      if (!r.ok) url.searchParams.set('e', '1'); else url.searchParams.delete('e');
-      location.href = url.toString();
+      const j = await r.json().catch(() => ({ error: fallback }));
+      const u = new URL(location.href);
+      u.searchParams.set('m', j.message || j.error);
+      if (!r.ok) u.searchParams.set('e', '1'); else u.searchParams.delete('e');
+      location.href = u.toString();
+    };
+
+    // Drag a bar's edge to change check-in or check-out. The bar follows the pointer;
+    // releasing it over a day sends the new date (the day of arrival / departure).
+    const from = chess.dataset.from;
+    const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+    const idxOf = (d) => Math.round((Date.parse(d + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000);
+    chess.addEventListener('pointerdown', (e) => {
+      const h = e.target.closest('.chess__handle');
+      if (!h) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const bar = h.closest('.chess__bar');
+      resizing = { bar, edge: h.dataset.edge, orig: bar.style.gridColumn, checkin: bar.dataset.checkin, checkout: bar.dataset.checkout, date: null };
+      bar.classList.add('resizing');
+      h.setPointerCapture(e.pointerId);
     });
+    chess.addEventListener('pointermove', (e) => {
+      if (!resizing) return;
+      const under = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.classList && el.classList.contains('chess__cell'));
+      if (!under) return;
+      const date = under.dataset.date;
+      const r = resizing;
+      const ci = r.edge === 'checkin' ? date : r.checkin;
+      const co = r.edge === 'checkout' ? date : r.checkout;
+      if (co <= ci) return;
+      r.date = date;
+      const [a, b] = r.orig.split('/').map((x) => x.trim());
+      const start = r.edge === 'checkin' ? 3 + idxOf(ci) * 2 : a;
+      const end = r.edge === 'checkout' ? 3 + idxOf(co) * 2 : b;
+      r.bar.style.gridColumn = `${start} / ${end}`;
+    });
+    const finish = (cancel) => {
+      const r = resizing;
+      if (!r) return;
+      resizing = null;
+      r.bar.classList.remove('resizing');
+      const changed = r.date && r.date !== (r.edge === 'checkin' ? r.checkin : r.checkout);
+      if (cancel || !changed) { r.bar.style.gridColumn = r.orig; return; }
+      const body = { checkin: r.edge === 'checkin' ? r.date : r.checkin, checkout: r.edge === 'checkout' ? r.date : r.checkout };
+      send(`/app/bookings/${r.bar.dataset.booking}/dates`, body, 'Не удалось изменить даты');
+    };
+    chess.addEventListener('pointerup', () => finish(false));
+    chess.addEventListener('pointercancel', () => finish(true));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') finish(true); });
+    // The click that ends an edge drag must not open the booking card.
+    let swallowClick = false;
+    chess.addEventListener('pointerdown', (e) => { swallowClick = Boolean(e.target.closest('.chess__handle')); }, true);
+    chess.addEventListener('click', (e) => { if (swallowClick) { e.preventDefault(); swallowClick = false; } }, true);
   }
 
   // Availability grid: edit a cell in a dialog, save via JSON
@@ -198,6 +251,8 @@
       form.elements.available.value = btn.dataset.available;
       form.elements.min_stay.value = btn.dataset.minstay;
       form.elements.open.checked = btn.dataset.closed !== '1';
+      form.elements.cta.checked = btn.dataset.cta === '1';
+      form.elements.ctd.checked = btn.dataset.ctd === '1';
       err.hidden = true;
       dialog.showModal();
     });
@@ -208,12 +263,17 @@
         room: current.dataset.room, date: current.dataset.date,
         price: form.elements.price.value, available: form.elements.available.value,
         min_stay: form.elements.min_stay.value, open: form.elements.open.checked,
+        cta: form.elements.cta.checked, ctd: form.elements.ctd.checked,
       };
       const r = await fetch('/app/prices', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({ error: 'Ошибка сохранения' }));
       if (!r.ok) { err.textContent = j.error; err.hidden = false; return; }
       const c = j.cell;
-      Object.assign(current.dataset, { price: c.price, available: c.available, closed: c.closed, minstay: c.min_stay });
+      Object.assign(current.dataset, { price: c.price, available: c.available, closed: c.closed, minstay: c.min_stay, cta: c.cta, ctd: c.ctd });
+      let flags = $('.inv-flags', current);
+      const text = [c.cta ? 'нз' : '', c.ctd ? 'нв' : '', c.min_stay > 1 ? `м${c.min_stay}` : ''].filter(Boolean).join(' ');
+      if (!flags && text) { flags = document.createElement('span'); flags.className = 'inv-flags'; current.appendChild(flags); }
+      if (flags) flags.textContent = text;
       $('.cell__avail', current).textContent = c.closed ? '✕' : c.available;
       $('.cell__price', current).textContent = c.price;
       const td = current.parentElement;

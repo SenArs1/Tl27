@@ -63,7 +63,7 @@ export function resultsPage(hotel, query, result) {
 
 function offerCard(hotel, query, o, nights) {
   const r = o.room;
-  const reasonText = { capacity: `Вмещает ${capacityText(r)}`, sold_out: 'Нет свободных номеров на эти даты', min_stay: `Минимум ${nightsLabel(o.minStay)} на эти даты` }[o.reason];
+  const reasonText = { capacity: `Вмещает ${capacityText(r)}`, sold_out: 'Нет свободных номеров на эти даты', min_stay: `Минимум ${nightsLabel(o.minStay)} на эти даты`, cta: 'В этот день заезд не принимается — попробуйте другую дату', ctd: 'В этот день выезд не принимается — попробуйте другую дату' }[o.reason];
   return html`<article class="card offer ${o.available ? '' : 'offer--off'}" aria-label="${r.name}">
     <div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div>
     <div class="offer__body">
@@ -91,7 +91,7 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
     <h1 class="h2">Почти готово</h1>
     ${formError ? html`<div class="flash flash--error" role="alert">${formError} <a href="/h/${hotel.slug}/rooms?${qs(query)}">Посмотреть другие номера</a></div>` : ''}
     <div class="checkout">
-      <form class="card form" method="post" action="/h/${hotel.slug}/book" novalidate data-checkout>
+      <form class="card form" method="post" action="/h/${hotel.slug}/book" novalidate data-checkout-form>
         <input type="hidden" name="checkin" value="${query.checkin}"><input type="hidden" name="checkout" value="${query.checkout}">
         <input type="hidden" name="adults" value="${query.adults}"><input type="hidden" name="children" value="${query.children}">
         <input type="hidden" name="promo" value="${query.promo}"><input type="hidden" name="room" value="${room.id}"><input type="hidden" name="rate" value="${rate.id}">

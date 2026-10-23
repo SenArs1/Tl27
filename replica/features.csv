@@ -41,13 +41,13 @@ Customer logos testimonials photos,marketing,could,yes,skip,their content
 "Room-level tape chart (rooms × days, guest names)",extranet,must,yes,yes,/app/chess
 Unassigned bookings row and drag to move between rooms,extranet,must,yes,yes,HTML5 drag + form in the booking card
 Create booking from an empty chessboard cell,extranet,should,yes,yes,
-Extend / shorten stay by dragging,extranet,should,yes,no,next
-Split stay into segments when moving mid-stay,extranet,could,yes,no,next
+Extend / shorten stay by dragging,extranet,should,yes,yes,drag the bar edge on the chessboard or the date form in the booking card
+Split stay into segments when moving mid-stay,extranet,could,yes,yes,"stay segments; ""move from date"" in the booking card"
 "Room stock: numbers, floors, sort order, cleaning status, repair",extranet,must,yes,yes,
 Configurable room order on the chessboard,extranet,should,yes,yes,by category / number / floor
 Main and extra places with adult/child extra-bed prices,rates,must,yes,yes,
 Child age groups with separate prices,rates,should,yes,partial,one age limit for now
-Derived rates and CTA/CTD restrictions,rates,could,yes,no,next
+Derived rates and CTA/CTD restrictions,rates,could,yes,yes,"parent rate, % or ₽, rounding, 3 levels; CTA/CTD per category and date; single occupancy discount"
 Extras grouped into folders,extras,should,yes,yes,
 Manual booking by staff with own price,extranet,must,yes,yes,
 Payments in booking card and balances,extranet,must,yes,yes,cash / card / transfer

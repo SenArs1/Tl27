@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { tx, findFreeRoom } from '../db.js';
 import { requireUser, requireOwner, checkCsrf, verifyPassword, hashPassword, createSession, sessionCookie, clearCookie, userHotels } from '../lib/auth.js';
-import { parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, addPayment, validateGuest, ensureInventory, logToChannels, BookingError, ACTIVE } from '../lib/booking.js';
+import { parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, moveSegment, splitStay, changeDates, segmentsOf, addPayment, validateGuest, ensureInventory, logToChannels, BookingError, ACTIVE } from '../lib/booking.js';
 import { addDays, diffDays, isIsoDate, isWeekend, nightsOf, todayIn, monthBounds } from '../lib/dates.js';
 import { createHotel, addPhysicalRooms, recountRooms, PROPERTY_TYPES } from '../lib/hotels.js';
 import { scope, BOOKING_LIST } from '../lib/scope.js';
@@ -101,7 +101,7 @@ export function appRouter(db, { showDemo }) {
   r.get('/', (req, res) => {
     const hid = req.user.hotel_id;
     const t = req.today;
-    const list = (where, ...p) => db.prepare(`${BOOKING_LIST} and ${where} order by r.sort, b.id`).all(hid, ...p);
+    const list = (where, ...p) => db.prepare(`${BOOKING_LIST} and ${where} order by room_number, b.id`).all(hid, ...p);
     const arrivals = list("b.checkin = ? and b.status in ('confirmed','checked_in')", t);
     const departures = list("b.checkout = ? and b.status in ('confirmed','checked_in','checked_out')", t);
     const rooms = db.prepare("select count(*) n from rooms where hotel_id = ? and active = 1 and status != 'repair'").get(hid).n;
@@ -120,7 +120,8 @@ export function appRouter(db, { showDemo }) {
       and created_at >= datetime('now','-30 days') group by source order by n desc`).all(hid);
     const totalN = src.reduce((x, y) => x + y.n, 0);
     const cancelled30 = db.prepare("select count(*) n from bookings where hotel_id = ? and status = 'cancelled' and created_at >= datetime('now','-30 days')").get(hid).n;
-    const unassigned = db.prepare("select count(*) n from bookings where hotel_id = ? and room_id is null and status in ('confirmed','checked_in') and checkout > ?").get(hid, t).n;
+    const unassigned = db.prepare(`select count(distinct s.booking_id) n from stay_segments s join bookings b on b.id = s.booking_id
+      where s.hotel_id = ? and s.room_id is null and b.status in ('confirmed','checked_in') and s.end > ?`).get(hid, t).n;
     const dirty = db.prepare("select count(*) n from rooms where hotel_id = ? and active = 1 and status = 'dirty'").get(hid).n;
     res.send(A.dashboardPage({
       req, hotel: req.hotelRow, msg: req.msg, arrivals, departures, inhouse, forecast, unassigned, dirty, debtors: debtRow.n, channels: req.s.channels(),
@@ -146,7 +147,11 @@ export function appRouter(db, { showDemo }) {
     const natural = (a, b) => a.number.localeCompare(b.number, 'ru', { numeric: true });
     if (sort === 'number') rooms = [...rooms].sort(natural);
     if (sort === 'floor') rooms = [...rooms].sort((a, b) => a.floor - b.floor || natural(a, b));
-    const bookings = db.prepare(`select * from bookings where hotel_id = ? and status not in ('cancelled','no_show') and checkin < ? and checkout > ? order by checkin`).all(h.id, to, from);
+    // One bar per part of a stay; first/last tell the view where the stay starts and ends.
+    const bookings = db.prepare(`select b.*, s.id as segment_id, s.room_id as seg_room, s.room_type_id as seg_type, s.start, s.end,
+        s.start = b.checkin as is_first, s.end = b.checkout as is_last
+      from stay_segments s join bookings b on b.id = s.booking_id
+      where s.hotel_id = ? and b.status not in ('cancelled','no_show') and s.start < ? and s.end > ? order by s.start`).all(h.id, to, from);
     const free = {};
     for (const t of types) {
       const dates = nightsOf(from, to);
@@ -205,7 +210,8 @@ export function appRouter(db, { showDemo }) {
         guest: { ...v.guest, comment }, source: 'extranet', staff: true, physicalRoomId: b.room ? int(b.room) : null,
         priceOverride: override, createdBy: req.user.id, idemKey: /^[0-9a-f-]{36}$/.test(b.idem || '') ? b.idem : null,
       });
-      back(res, `/app/bookings/${booking.id}`, `Бронь ${booking.code} создана${booking.room_id ? '' : ' — свободного номера на весь срок нет, распределите её на шахматке'}`);
+      const noRoom = segmentsOf(db, booking.id).some((x) => !x.room_id);
+      back(res, `/app/bookings/${booking.id}`, `Бронь ${booking.code} создана${noRoom ? ' — свободного номера на весь срок нет, распределите её на шахматке' : ''}`);
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
       res.status(409).send(newBookingView(req, values, { formError: e.message }));
@@ -217,7 +223,8 @@ export function appRouter(db, { showDemo }) {
     if (!b) return next();
     res.send(A.bookingDetailPage({
       req, hotel: req.hotelRow, b, room: db.prepare('select * from room_types where id = ?').get(b.room_type_id),
-      rate: db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id), physical: b.room_id ? db.prepare('select * from rooms where id = ?').get(b.room_id) : null,
+      rate: db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id),
+      segments: db.prepare('select s.*, r.number, t.name as type_name from stay_segments s left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start').all(b.id),
       rooms: req.s.rooms(), payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id), channels: req.s.channels(), msg: req.msg,
     }));
   });
@@ -228,28 +235,50 @@ export function appRouter(db, { showDemo }) {
     const to = String(req.body.status || '');
     const ret = req.body.back === '/app' ? '/app' : `/app/bookings/${b.id}`;
     if (!(TRANSITIONS[b.status] || []).includes(to)) return back(res, ret, 'Такой переход статуса невозможен', true);
-    if (to === 'checked_in' && !b.room_id) return back(res, ret, 'Сначала назначьте номер — на шахматке или в карточке брони', true);
+    const segs = segmentsOf(db, b.id);
+    if (to === 'checked_in' && segs.some((x) => !x.room_id)) return back(res, ret, 'Сначала назначьте номер — на шахматке или в карточке брони', true);
     if (to === 'cancelled') cancelBooking(db, b);
     else if (to === 'no_show') markNoShow(db, b);
     else {
       db.prepare('update bookings set status = ? where id = ?').run(to, b.id);
-      if (to === 'checked_out' && b.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(b.room_id);
+      const last = segs[segs.length - 1];
+      if (to === 'checked_out' && last && last.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(last.room_id);
     }
     back(res, ret, { checked_in: `${b.guest_name} заселён`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to]);
   });
-  r.post('/bookings/:id/move', (req, res, next) => {
-    const b = req.s.booking(req.params.id);
-    if (!b) return next();
-    const target = req.body.room_id ? req.s.room(req.body.room_id) : null;
-    if (req.body.room_id && !target) return wantsJson(req) ? res.status(404).json({ error: 'Номер не найден' }) : next();
+  // Shared reply for the chessboard (JSON) and the booking card (form + redirect).
+  const reply = (req, res, b, fn, okText) => {
     try {
-      moveBooking(db, b, target ? target.id : null);
-      const text = target ? `Бронь перенесена в номер ${target.number}` : 'Номер снят с брони';
+      const text = okText(fn());
       return wantsJson(req) ? res.json({ ok: true, message: text }) : back(res, `/app/bookings/${b.id}`, text);
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
       return wantsJson(req) ? res.status(409).json({ error: e.message }) : back(res, `/app/bookings/${b.id}`, e.message, true);
     }
+  };
+  r.post('/bookings/:id/move', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const target = req.body.room_id ? req.s.room(req.body.room_id) : null;
+    if (req.body.room_id && !target) return wantsJson(req) ? res.status(404).json({ error: 'Номер не найден' }) : next();
+    const segId = int(req.body.segment_id);
+    reply(req, res, b, () => (segId ? moveSegment(db, b, segId, target ? target.id : null) : moveBooking(db, b, target ? target.id : null)),
+      () => (target ? `Перенесено в номер ${target.number}` : 'Номер снят с брони'));
+  });
+  r.post('/bookings/:id/split', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const target = req.s.room(req.body.room_id);
+    if (!target) return back(res, `/app/bookings/${b.id}`, 'Выберите номер для переселения', true);
+    reply(req, res, b, () => splitStay(db, b, String(req.body.date || ''), target.id), () => `С ${String(req.body.date).split('-').reverse().join('.')} гость живёт в номере ${target.number}`);
+  });
+  r.post('/bookings/:id/dates', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const checkin = String(req.body.checkin || b.checkin);
+    const checkout = String(req.body.checkout || b.checkout);
+    reply(req, res, b, () => changeDates(db, req.hotelRow, b, checkin, checkout),
+      (nb) => `Даты изменены: ${nb.checkin.split('-').reverse().join('.')} — ${nb.checkout.split('-').reverse().join('.')}, сумма ${nb.total.toLocaleString('ru-RU')} ₽`);
   });
   r.post('/bookings/:id/pay', (req, res, next) => {
     const b = req.s.booking(req.params.id);
@@ -280,14 +309,16 @@ export function appRouter(db, { showDemo }) {
     const type = req.s.type(b.room);
     if (!type || !isIsoDate(b.date) || b.date < req.today) return res.status(400).json({ error: 'Неверная категория или дата' });
     const price = int(b.price, -1), available = int(b.available, -1), minStay = int(b.min_stay, 1);
-    const sold = db.prepare(`select count(*) n from bookings where room_type_id = ? and checkin <= ? and checkout > ? and status in ${ACTIVE}`).get(type.id, b.date, b.date).n;
+    const sold = db.prepare(`select count(*) n from stay_segments s join bookings b on b.id = s.booking_id where s.room_type_id = ? and s.start <= ? and s.end > ? and b.status in ${ACTIVE}`).get(type.id, b.date, b.date).n;
     if (price < 0 || price > 1000000) return res.status(422).json({ error: 'Цена от 0 до 1 000 000 ₽' });
     if (available < 0 || available + sold > type.total_rooms) return res.status(422).json({ error: `Свободно может быть от 0 до ${type.total_rooms - sold} (продано ${sold} из ${type.total_rooms})` });
     if (minStay < 1 || minStay > 30) return res.status(422).json({ error: 'Минимум ночей от 1 до 30' });
     const closed = b.open ? 0 : 1;
+    const cta = b.cta ? 1 : 0;
+    const ctd = b.ctd ? 1 : 0;
     ensureInventory(db, type, [b.date]);
-    db.prepare('update inventory set price = ?, available = ?, closed = ?, min_stay = ? where room_type_id = ? and date = ?').run(price, available, closed, minStay, type.id, b.date);
-    logToChannels(db, req.user.hotel_id, 'update', `${type.name}, ${b.date}: ${price} ₽, свободно ${available}${closed ? ', продажи закрыты' : ''}`);
+    db.prepare('update inventory set price = ?, available = ?, closed = ?, min_stay = ?, cta = ?, ctd = ? where room_type_id = ? and date = ?').run(price, available, closed, minStay, cta, ctd, type.id, b.date);
+    logToChannels(db, req.user.hotel_id, 'update', `${type.name}, ${b.date}: ${price} ₽, свободно ${available}${closed ? ', продажи закрыты' : ''}${cta ? ', запрет заезда' : ''}${ctd ? ', запрет выезда' : ''}`);
     res.json({ ok: true, cell: db.prepare('select * from inventory where room_type_id = ? and date = ?').get(type.id, b.date) });
   });
   r.post('/prices/bulk', (req, res) => {
@@ -305,7 +336,13 @@ export function appRouter(db, { showDemo }) {
       percent: 'update inventory set price = max(0, cast(round(price * (100 + ?) / 100.0) as integer)) where room_type_id = ? and date = ?',
       close: 'update inventory set closed = 1 where ? is not null and room_type_id = ? and date = ?',
       open: 'update inventory set closed = 0 where ? is not null and room_type_id = ? and date = ?',
+      cta_on: 'update inventory set cta = 1 where ? is not null and room_type_id = ? and date = ?',
+      cta_off: 'update inventory set cta = 0 where ? is not null and room_type_id = ? and date = ?',
+      ctd_on: 'update inventory set ctd = 1 where ? is not null and room_type_id = ? and date = ?',
+      ctd_off: 'update inventory set ctd = 0 where ? is not null and room_type_id = ? and date = ?',
+      minstay: 'update inventory set min_stay = ? where room_type_id = ? and date = ?',
     }[b.action];
+    if (b.action === 'minstay' && !(value >= 1 && value <= 30)) return back(res, `/app/prices?from=${from}`, 'Минимум ночей от 1 до 30', true);
     if (!st) return back(res, '/app/prices', 'Выберите действие', true);
     const start = from < req.today ? req.today : from;
     const dates = nightsOf(start, addDays(to, 1)).filter((d) => (b.days === 'weekend' ? isWeekend(d) : b.days === 'weekday' ? !isWeekend(d) : true));
@@ -377,7 +414,8 @@ export function appRouter(db, { showDemo }) {
   r.post('/rooms/stock/:id/delete', (req, res, next) => {
     const room = req.s.room(req.params.id);
     if (!room) return next();
-    const future = db.prepare(`select count(*) n from bookings where room_id = ? and checkout > ? and status in ('confirmed','checked_in')`).get(room.id, req.today).n;
+    const future = db.prepare(`select count(distinct s.booking_id) n from stay_segments s join bookings b on b.id = s.booking_id
+      where s.room_id = ? and s.end > ? and b.status in ('confirmed','checked_in')`).get(room.id, req.today).n;
     if (future) return back(res, '/app/rooms#stock', `В номере ${room.number} есть будущие брони (${future}) — сначала переселите их`, true);
     tx(db, () => {
       db.prepare('update rooms set active = 0, number = ? where id = ?').run(`${room.number}~${room.id}`, room.id);
@@ -387,22 +425,42 @@ export function appRouter(db, { showDemo }) {
   });
   const rateInput = (b) => ({
     name: str(b.name, 80), description: str(b.description, 500), meal: ['none', 'breakfast', 'half'].includes(b.meal) ? b.meal : 'none',
-    meal_price: Math.max(0, int(b.meal_price)), refundable: b.refundable === 'on' ? 1 : 0, discount_pct: Math.min(90, Math.max(0, int(b.discount_pct))),
+    meal_price: Math.max(0, int(b.meal_price)), refundable: b.refundable === 'on' ? 1 : 0,
     extra_adult_price: Math.max(0, int(b.extra_adult_price)), extra_child_price: Math.max(0, int(b.extra_child_price)), active: b.active === 'on' ? 1 : 0,
+    parent_id: int(b.parent_id) || null, adjust_type: b.adjust_type === 'fixed' ? 'fixed' : 'pct', adjust_value: int(b.adjust_value),
+    rounding: [0, 10, 50, 100].includes(int(b.rounding)) ? int(b.rounding) : 0, single_discount: Math.max(0, int(b.single_discount)),
   });
+  // A parent must belong to the hotel, must not lead back to the rate itself, and
+  // the chain stays within three levels.
+  const rateError = (req, t, selfId = 0) => {
+    if (t.name.length < 2) return 'Укажите название тарифа';
+    if (t.adjust_type === 'pct' && (t.adjust_value < -90 || t.adjust_value > 300)) return 'Изменение в процентах — от −90 до +300';
+    if (!t.parent_id) return null;
+    let depth = 1;
+    for (let p = req.s.rate(t.parent_id); p; p = p.parent_id ? req.s.rate(p.parent_id) : null) {
+      if (p.id === selfId) return 'Тариф не может считаться от самого себя (через цепочку тарифов)';
+      if (++depth > 3) return 'Цепочка тарифов — не глубже трёх уровней';
+    }
+    if (!req.s.rate(t.parent_id)) return 'Родительский тариф не найден';
+    return null;
+  };
+  const RATE_COLS = 'name=?, description=?, meal=?, meal_price=?, refundable=?, extra_adult_price=?, extra_child_price=?, parent_id=?, adjust_type=?, adjust_value=?, rounding=?, single_discount=?, discount_pct=0';
+  const rateVals = (t) => [t.name, t.description, t.meal, t.meal_price, t.refundable, t.extra_adult_price, t.extra_child_price, t.parent_id, t.adjust_type, t.adjust_value, t.rounding, t.single_discount];
   r.post('/rooms/rates', (req, res) => {
     const t = rateInput(req.body);
-    if (t.name.length < 2) return back(res, '/app/rooms#rates', 'Укажите название тарифа', true);
-    db.prepare('insert into rate_plans (hotel_id, name, description, meal, meal_price, refundable, discount_pct, extra_adult_price, extra_child_price) values (?,?,?,?,?,?,?,?,?)')
-      .run(req.user.hotel_id, t.name, t.description, t.meal, t.meal_price, t.refundable, t.discount_pct, t.extra_adult_price, t.extra_child_price);
+    const err = rateError(req, t);
+    if (err) return back(res, '/app/rooms#rates', err, true);
+    const id = db.prepare('insert into rate_plans (hotel_id, name) values (?, ?)').run(req.user.hotel_id, t.name).lastInsertRowid;
+    db.prepare(`update rate_plans set ${RATE_COLS} where id = ?`).run(...rateVals(t), id);
     back(res, '/app/rooms#rates', `Тариф «${t.name}» добавлен`);
   });
   r.post('/rooms/rates/:id', (req, res, next) => {
+    const old = req.s.rate(req.params.id);
+    if (!old) return next();
     const t = rateInput(req.body);
-    if (!req.s.rate(req.params.id)) return next();
-    if (t.name.length < 2) return back(res, '/app/rooms#rates', 'Укажите название тарифа', true);
-    db.prepare('update rate_plans set name=?, description=?, meal=?, meal_price=?, refundable=?, discount_pct=?, extra_adult_price=?, extra_child_price=?, active=? where id = ? and hotel_id = ?')
-      .run(t.name, t.description, t.meal, t.meal_price, t.refundable, t.discount_pct, t.extra_adult_price, t.extra_child_price, t.active, int(req.params.id), req.user.hotel_id);
+    const err = rateError(req, t, old.id);
+    if (err) return back(res, '/app/rooms#rates', err, true);
+    db.prepare(`update rate_plans set ${RATE_COLS}, active = ? where id = ?`).run(...rateVals(t), t.active, old.id);
     back(res, '/app/rooms#rates', 'Сохранено');
   });
   r.post('/rooms/groups', (req, res) => {
@@ -525,11 +583,11 @@ export function appRouter(db, { showDemo }) {
     let data;
     if (tab === 'sales') data = salesReport(db, hid, from, to);
     else if (tab === 'lists') {
-      const q = (where) => db.prepare(`${BOOKING_LIST} and ${where} order by r.sort, r.number`).all(hid, from);
+      const q = (where) => db.prepare(`${BOOKING_LIST} and ${where} order by room_number`).all(hid, from);
       data = {
         arrivals: q("b.checkin = ? and b.status in ('confirmed','checked_in','checked_out')"),
         departures: q("b.checkout = ? and b.status in ('confirmed','checked_in','checked_out')"),
-        inhouse: db.prepare(`${BOOKING_LIST} and b.checkin <= ? and b.checkout > ? and b.status in ${ACTIVE} order by r.sort, r.number`).all(hid, from, from),
+        inhouse: db.prepare(`${BOOKING_LIST} and b.checkin <= ? and b.checkout > ? and b.status in ${ACTIVE} order by room_number`).all(hid, from, from),
       };
     } else if (tab === 'tax') {
       const rows = db.prepare(`select * from bookings where hotel_id = ? and status in ${ACTIVE} and checkout >= ? and checkout <= ? order by checkout`).all(hid, from, to);
@@ -632,18 +690,20 @@ export function occupancyReport(db, hotelId, from, to) {
   const types = db.prepare('select * from room_types where hotel_id = ? and active = 1 order by sort, id').all(hotelId);
   const roomsByType = new Map(types.map((t) => [t.id, db.prepare("select count(*) n from rooms where room_type_id = ? and active = 1 and status != 'repair'").get(t.id).n]));
   const bookings = db.prepare(`select * from bookings where hotel_id = ? and status in ${ACTIVE} and checkin < ? and checkout > ?`).all(hotelId, end, from);
+  const segs = db.prepare('select * from stay_segments where booking_id = ? order by start');
   const perDay = new Map(days.map((d) => [d, { date: d, sold: 0, revenue: 0, arrivals: 0, departures: 0 }]));
   const perType = new Map(types.map((t) => [t.id, { name: t.name, sold: 0, revenue: 0 }]));
   for (const b of bookings) {
-    const n = diffDays(b.checkin, b.checkout);
-    const nightly = (b.nights_total) / n;
-    for (const d of nightsOf(b.checkin, b.checkout)) {
-      const row = perDay.get(d);
-      if (!row) continue;
-      row.sold++;
-      row.revenue += nightly;
-      const t = perType.get(b.room_type_id);
-      if (t) { t.sold++; t.revenue += nightly; }
+    const nightly = b.nights_total / diffDays(b.checkin, b.checkout);
+    for (const sg of segs.all(b.id)) {
+      for (const d of nightsOf(sg.start, sg.end)) {
+        const row = perDay.get(d);
+        if (!row) continue;
+        row.sold++;
+        row.revenue += nightly;
+        const t = perType.get(sg.room_type_id);
+        if (t) { t.sold++; t.revenue += nightly; }
+      }
     }
     if (perDay.has(b.checkin)) perDay.get(b.checkin).arrivals++;
     if (perDay.has(b.checkout)) perDay.get(b.checkout).departures++;

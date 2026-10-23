@@ -143,11 +143,12 @@ test('rooms: booking gets a physical room, move checks conflicts and categories'
   const q = { checkin: addDays(today(), 10), checkout: addDays(today(), 12), adults: 2, children: 0, promo: '' };
   const a = createBooking(db, hotel, { query: q, roomId: std.id, rateId: rate.id, guest });
   const b = createBooking(db, hotel, { query: q, roomId: std.id, rateId: rate.id, guest });
-  const roomOf = (x) => db.prepare('select number from rooms where id = ?').get(x.room_id).number;
+  const roomIdOf = (x) => db.prepare('select room_id from stay_segments where booking_id = ? order by start').get(x.id).room_id;
+  const roomOf = (x) => db.prepare('select number from rooms where id = ?').get(roomIdOf(x)).number;
   assert.equal(roomOf(a), '201');
   assert.equal(roomOf(b), '202');
   // b cannot move into a's room
-  assert.throws(() => moveBooking(db, b, a.room_id), (e) => e.code === 'room_busy');
+  assert.throws(() => moveBooking(db, b, roomIdOf(a)), (e) => e.code === 'room_busy');
   // move to the suite: availability shifts from Standard to Suite
   const suiteRoom = db.prepare('select * from rooms where room_type_id = ? order by sort').get(lux.id);
   const avail = (t) => db.prepare('select available from inventory where room_type_id = ? and date = ?').get(t, q.checkin).available;
@@ -157,7 +158,7 @@ test('rooms: booking gets a physical room, move checks conflicts and categories'
   assert.equal(avail(std.id), stdBefore + 1);
   assert.equal(avail(lux.id), luxBefore - 1);
   // a specific busy room is refused at creation
-  assert.throws(() => createBooking(db, hotel, { query: q, roomId: std.id, rateId: rate.id, guest, staff: true, physicalRoomId: a.room_id }), (e) => e.code === 'room_busy');
+  assert.throws(() => createBooking(db, hotel, { query: q, roomId: std.id, rateId: rate.id, guest, staff: true, physicalRoomId: roomIdOf(a) }), (e) => e.code === 'room_busy');
 });
 
 test('payments add up and mark a booking paid', () => {

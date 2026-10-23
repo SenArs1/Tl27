@@ -14,9 +14,10 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
   const cols = `var(--chess-label) repeat(${days * 2}, var(--chess-half))`;
   const byRoom = new Map();
   const unassigned = new Map();
+  // Each entry is one part of a stay (a segment): start/end and seg_room describe the part.
   for (const b of bookings) {
-    if (b.room_id) (byRoom.get(b.room_id) || byRoom.set(b.room_id, []).get(b.room_id)).push(b);
-    else (unassigned.get(b.room_type_id) || unassigned.set(b.room_type_id, []).get(b.room_type_id)).push(b);
+    if (b.seg_room) (byRoom.get(b.seg_room) || byRoom.set(b.seg_room, []).get(b.seg_room)).push(b);
+    else (unassigned.get(b.seg_type) || unassigned.set(b.seg_type, []).get(b.seg_type)).push(b);
   }
   const typeName = new Map(types.map((t) => [t.id, t.name]));
   const visibleTypes = types.filter((t) => !typeFilter || t.id === typeFilter);
@@ -28,20 +29,26 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
   </div>`;
 
   const bar = (b) => {
-    const s = diffDays(from, b.checkin);
-    const e = diffDays(from, b.checkout);
+    const s = diffDays(from, b.start);
+    const e = diffDays(from, b.end);
     if (e <= 0 || s >= days) return '';
     const start = s < 0 ? 2 : 3 + s * 2;
     const end = e >= days ? 2 + days * 2 : 3 + e * 2;
     const unpaid = b.paid_amount < b.total;
     const nights = diffDays(b.checkin, b.checkout);
-    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}, ${STATUS[b.status] || b.status}${unpaid ? ', есть долг' : ''}`;
-    return html`<a class="chess__bar chess__bar--${b.status} ${s < 0 ? 'cut-l' : ''} ${e > days ? 'cut-r' : ''}" style="grid-column:${start} / ${end}"
-      href="/app/bookings/${b.id}" draggable="true" data-booking="${b.id}" title="${label}" aria-label="${label}">
-      ${unpaid ? html`<span class="chess__debt" aria-hidden="true">₽</span>` : ''}<span class="chess__guest">${b.guest_name}</span><small>${b.adults + b.children} г. · ${sourceShort(b.source, chName)}</small></a>`;
+    const part = b.is_first && b.is_last ? '' : `, часть ${fmtDate(b.start)} — ${fmtDate(b.end)}`;
+    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}${part}, ${STATUS[b.status] || b.status}${unpaid ? ', есть долг' : ''}`;
+    // Edges can be dragged to change dates: check-in only before arrival, check-out until departure.
+    const left = b.is_first && b.status === 'confirmed' && s >= 0;
+    const right = b.is_last && ['confirmed', 'checked_in'].includes(b.status) && e <= days;
+    return html`<a class="chess__bar chess__bar--${b.status} ${s < 0 ? 'cut-l' : ''} ${e > days ? 'cut-r' : ''} ${b.is_first ? '' : 'cont-l'} ${b.is_last ? '' : 'cont-r'}" style="grid-column:${start} / ${end}"
+      href="/app/bookings/${b.id}" draggable="true" data-booking="${b.id}" data-segment="${b.segment_id}" data-checkin="${b.checkin}" data-checkout="${b.checkout}" title="${label}" aria-label="${label}">
+      ${left ? html`<span class="chess__handle chess__handle--l" data-edge="checkin" draggable="false" title="Потяните, чтобы изменить дату заезда"></span>` : ''}
+      ${unpaid ? html`<span class="chess__debt" aria-hidden="true">₽</span>` : ''}<span class="chess__guest">${b.is_first ? '' : '→ '}${b.guest_name}</span><small>${b.adults + b.children} г. · ${sourceShort(b.source, chName)}</small>
+      ${right ? html`<span class="chess__handle chess__handle--r" data-edge="checkout" draggable="false" title="Потяните, чтобы изменить дату выезда"></span>` : ''}</a>`;
   };
 
-  const cells = (roomId, typeId) => dates.map((d, i) => html`<a class="chess__cell ${isWeekend(d) ? 'we' : ''} ${d === today ? 'is-today' : ''}" style="grid-column:${2 + i * 2} / span 2"
+  const cells = (roomId, typeId) => dates.map((d, i) => html`<a class="chess__cell ${isWeekend(d) ? 'we' : ''} ${d === today ? 'is-today' : ''}" style="grid-column:${2 + i * 2} / span 2" data-date="${d}" data-idx="${i}"
       href="/app/bookings/new?${new URLSearchParams({ type: typeId, ...(roomId ? { room: roomId } : {}), checkin: d, checkout: addDays(d, 1) })}" tabindex="-1" aria-hidden="true"></a>`);
 
   const roomRow = (r, showType) => html`<div class="chess__row" style="grid-template-columns:${cols}" data-room="${r.id}" data-room-number="${r.number}">
@@ -102,10 +109,10 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
       <li><span class="chess__bar chess__bar--checked_out legend-swatch"></span>выехал</li>
       <li><span class="chess__debt">₽</span>не оплачена полностью</li>
       <li><span class="dot dot--dirty"></span>нужна уборка</li><li><span class="dot dot--repair"></span>ремонт</li>
-      <li class="muted">Клик по пустой клетке — новая бронь. Перетащите бронь на другой номер, чтобы переселить.</li>
+      <li class="muted">Клик по пустой клетке — новая бронь. Перетащите бронь на другой номер — переселение. Потяните за край брони — новая дата заезда или выезда. «→» — продолжение проживания в другом номере.</li>
     </ul>
     <div class="chess-wrap" tabindex="0" role="region" aria-label="Шахматка номеров">
-      <div class="chess" data-chess>${head}${body}</div>
+      <div class="chess" data-chess data-from="${from}" data-days="${days}">${head}${body}</div>
     </div>`,
   });
 }

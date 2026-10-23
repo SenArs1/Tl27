@@ -10,9 +10,9 @@ Summary in our own words; links at the bottom.
 | Area | Market standard | Stayra |
 | --- | --- | --- |
 | Dashboard | arrivals/departures/in-house, occupancy, free rooms, unassigned bookings, cleaning, debts, ADR/RevPAR | ✅ all, plus a 14-day forecast and booking sources |
-| Chessboard | rows = rooms by category, columns = days, guest name on the bar, colours by status, debt mark, "Без номера" row, drag-to-move, booking from an empty cell, cleaning status, repair | ✅ all; ❌ extend by drag, split stay into segments, booking lock |
+| Chessboard | rows = rooms by category, columns = days, guest name on the bar, colours by status, debt mark, "Без номера" row, drag-to-move, booking from an empty cell, cleaning status, repair | ✅ all, plus changing dates by dragging the edge and split stays; ❌ booking lock |
 | Room stock | main and extra places, child ages, price by occupancy | ✅ main/extra places, extra-bed prices for adult/child in the rate, child age limit; ❌ several age groups |
-| Rates | meals, cancellation, prepayment, MinLOS, stop sale; derived rates; CTA/CTD | ✅ meals, discount, cancellation, MinLOS, stop sale; ❌ derived rates, CTA/CTD, single occupancy |
+| Rates | meals, cancellation, prepayment, MinLOS, stop sale; derived rates; CTA/CTD | ✅ meals, cancellation, MinLOS, stop sale, derived rates (%/₽, rounding, 3 levels), CTA/CTD, single occupancy; ❌ MaxLOS |
 | Extras | categories, units (stay/night/guest), shown in the booking engine | ✅ groups ("folders"), units, grouped in the engine; ❌ VAT/54-FZ fields, "included in the rate" |
 | Booking journal | search by name/number/OTA number, filters by dates (stay/created), status, channel; Excel export; change history | ✅ search incl. channel number, filters, source; ❌ Excel export of the journal, history |
 | Reports | occupancy/revenue/ADR/RevPAR, sources, cancellations, payments, arrival/departure lists, tourist tax, MVD | ✅ occupancy and revenue (by day/category), sales and sources, cancellations, lists, tourist tax, CSV; ❌ MVD, cash report, pick-up |
@@ -31,8 +31,8 @@ per-municipality rate table are next.
 
 ## Next ideas (from the analysis)
 
-1. Extend/shorten a stay by dragging on the chessboard; split into segments when moving to another room mid-stay.
-2. Derived rates (−10% from the base, with rounding), CTA/CTD, single-occupancy price.
+1. ✅ Extend/shorten a stay by dragging on the chessboard; split into segments when moving to another room mid-stay (v3).
+2. ✅ Derived rates (−10% from the base, with rounding), CTA/CTD, single-occupancy price (v3).
 3. Child age groups (0–5, 6–12) with their own prices.
 4. Guest list for MVD and electronic check-in.
 5. Roles "Горничная" (no personal data) and "Инвестор" (reports only).

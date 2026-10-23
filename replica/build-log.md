@@ -48,3 +48,21 @@ Bugs found by tests in v2 and fixed:
 | B8 | S4 | today's date in the chessboard header was unreadable on weekends | CSS rule order |
 
 Tests: 28 unit/HTTP (incl. 8 for hotel isolation), 23 e2e + 1 deliberate skip (drag-and-drop on a phone).
+
+## Version 3 (first three items from the analysis, 2026-10-23)
+
+| item | how it's done |
+| --- | --- |
+| Changing dates by dragging | the left/right edge of a bar on the chessboard (arrival — only before check-in, departure — also for in-house guests); a "Заезд/Выезд" form in the card. Booked nights keep their price, new nights are charged by the booking's rate at today's prices, removed nights come off the bill; tourist tax and per-night extras are recalculated; availability is updated; blocked if the room is taken on the new nights |
+| Split stay | new model: **stay segments** (`stay_segments`). One booking, one bill, several parts in different rooms/categories. "Переселить с даты" in the card; on the chessboard the continuation is marked "→" with a dotted edge. Moving to another category moves the availability for those nights; moving a part back into the same room merges the parts |
+| Derived rates | a rate is calculated from the base price or from another rate: ±% or ±₽ per night, rounding to 10/50/100 ₽, up to 3 levels; cycles and broken chains are refused. Discount for single occupancy. Old discounts converted automatically |
+| CTA/CTD | "Запрет заезда" / "Запрет выезда" per category and date: in the cell dialog and in bulk changes (plus "Минимум ночей"). The booking engine explains why it's unavailable; administrators can book regardless of bans |
+
+Bugs found by tests in v3 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B9 | S2 | the chessboard's `data-checkout` attribute collided with the booking engine form selector — the script crashed on a chessboard with bookings, and drag stopped working | the form's marker renamed to `data-checkout-form` |
+| B10 | S3 | after dragging a bar edge, the click on release opened the booking card and cut off the date change | the click after an edge drag is suppressed |
+
+Tests: 35 unit/HTTP (+7 new: dates, split, rates, CTA/CTD, HTTP routes), 30 e2e + 2 deliberate skips (mouse dragging on a phone).

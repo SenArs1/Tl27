@@ -36,9 +36,12 @@ export function seed(db, now = new Date()) {
   });
 
   db.prepare("update rate_plans set name = 'Гибкий', description = 'Бесплатная отмена до дня заезда. Оплата при заселении.', extra_adult_price = 1500, extra_child_price = 800 where hotel_id = ?").run(hotelId);
-  const insRate = db.prepare('insert into rate_plans (hotel_id, name, description, meal, meal_price, refundable, discount_pct, extra_adult_price, extra_child_price) values (?,?,?,?,?,?,?,?,?)');
-  insRate.run(hotelId, 'Гибкий с завтраком', 'Завтрак «шведский стол» и бесплатная отмена.', 'breakfast', 650, 1, 0, 1500, 800);
-  insRate.run(hotelId, 'Выгодный', 'Скидка 12%. Отмена без возврата оплаты.', 'none', 0, 0, 12, 1300, 700);
+  const flexId = db.prepare('select id from rate_plans where hotel_id = ?').get(hotelId).id;
+  db.prepare('update rate_plans set single_discount = 500 where id = ?').run(flexId);
+  const insRate = db.prepare(`insert into rate_plans (hotel_id, name, description, meal, meal_price, refundable, parent_id, adjust_type, adjust_value, rounding, extra_adult_price, extra_child_price)
+    values (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  insRate.run(hotelId, 'Гибкий с завтраком', 'Завтрак «шведский стол» и бесплатная отмена.', 'breakfast', 650, 1, flexId, 'pct', 0, 0, 1500, 800);
+  insRate.run(hotelId, 'Выгодный', 'Скидка 12% от гибкого тарифа. Отмена без возврата оплаты.', 'none', 0, 0, flexId, 'pct', -12, 10, 1300, 700);
 
   const insGroup = db.prepare('insert into extra_groups (hotel_id, name, sort) values (?,?,?)');
   const gTransfer = Number(insGroup.run(hotelId, 'Трансфер и парковка', 1).lastInsertRowid);

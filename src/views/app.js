@@ -1,7 +1,7 @@
 import { html, raw, rub, field } from './html.js';
 import { appLayout, bare } from './layout.js';
 import { statusBadge } from './engine.js';
-import { fmtDate, fmtShort, weekday, isWeekend, nightsLabel, diffDays } from '../lib/dates.js';
+import { fmtDate, fmtShort, weekday, isWeekend, nightsLabel, diffDays, addDays as addDaysV } from '../lib/dates.js';
 import { LOGO } from './icons.js';
 import { BRAND } from '../content.js';
 import { PROPERTY_TYPES } from '../lib/hotels.js';
@@ -171,7 +171,7 @@ export function newBookingPage({ req, hotel, types, rooms, rates, extras, values
   });
 }
 
-export function bookingDetailPage({ req, hotel, b, room, rate, physical, rooms, payments, channels, msg }) {
+export function bookingDetailPage({ req, hotel, b, room, rate, segments, rooms, payments, channels, msg }) {
   const extras = JSON.parse(b.extras || '[]');
   const next = { confirmed: [['checked_in', 'Заселить'], ['no_show', 'Незаезд'], ['cancelled', 'Отменить бронь']], checked_in: [['checked_out', 'Выселить']] }[b.status] || [];
   const debt = b.total - b.paid_amount;
@@ -189,7 +189,7 @@ export function bookingDetailPage({ req, hotel, b, room, rate, physical, rooms, 
           <dt>Телефон</dt><dd><a href="tel:${b.guest_phone}">${b.guest_phone}</a></dd>
           <dt>Почта</dt><dd>${b.guest_email ? html`<a href="mailto:${b.guest_email}">${b.guest_email}</a>` : '—'}</dd>
           <dt>Категория</dt><dd>${room.name}</dd>
-          <dt>Номер</dt><dd>${physical ? `№ ${physical.number}` : html`<span class="badge badge--warn">не назначен</span>`}</dd>
+          <dt>Номер</dt><dd>${segments.map((sg, i) => html`${i ? ' → ' : ''}${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">не назначен</span>`}`)}</dd>
           <dt>Тариф</dt><dd>${rate.name}</dd>
           <dt>Даты</dt><dd>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))}</dd>
           <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
@@ -198,9 +198,21 @@ export function bookingDetailPage({ req, hotel, b, room, rate, physical, rooms, 
           <dt>Создана</dt><dd>${b.created_at} UTC</dd>
         </dl>
         ${next.length ? html`<div class="actions">${next.map(([s, label]) => html`<form method="post" action="/app/bookings/${b.id}/status" ${s === 'cancelled' ? raw('data-confirm="Отменить бронь и вернуть номера в продажу?"') : ''}>${csrf(req)}<input type="hidden" name="status" value="${s}"><button class="btn ${s === 'cancelled' ? 'btn--danger' : s === 'no_show' ? 'btn--ghost' : 'btn--primary'}" type="submit">${label}</button></form>`)}</div>` : ''}
-        ${live ? html`<form class="form form--inline move-form" method="post" action="/app/bookings/${b.id}/move">${csrf(req)}
-          ${field({ prefix: 'mv', name: 'room_id', label: 'Переселить в номер', type: 'select', value: b.room_id || '', options: [['', '— без номера —'], ...rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`])] })}
-          <button class="btn btn--secondary" type="submit">Переселить</button></form>` : ''}
+        ${live ? html`<h3 class="h3 move-form">Проживание</h3>
+          <ul class="segments">${segments.map((sg) => html`<li>
+            <span><strong>${fmtDate(sg.start)} — ${fmtDate(sg.end)}</strong> · ${sg.type_name} · ${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">без номера</span>`}</span>
+            <form class="form form--inline" method="post" action="/app/bookings/${b.id}/move">${csrf(req)}<input type="hidden" name="segment_id" value="${sg.id}">
+              ${field({ prefix: `mv${sg.id}`, name: 'room_id', label: segments.length > 1 ? 'Переселить эту часть в номер' : 'Переселить в номер', type: 'select', value: sg.room_id || '', options: [['', '— без номера —'], ...rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`])] })}
+              <button class="btn btn--secondary" type="submit">Переселить</button></form></li>`)}</ul>
+          ${diffDays(b.checkin, b.checkout) > 1 ? html`<form class="form form--inline" method="post" action="/app/bookings/${b.id}/split">${csrf(req)}
+            ${field({ prefix: 'sp', name: 'date', label: 'Переселить с даты', type: 'date', value: '', attrs: `min="${addDaysV(b.checkin, 1)}" max="${addDaysV(b.checkout, -1)}" required`, hint: 'Ночи до этой даты остаются в текущем номере' })}
+            ${field({ prefix: 'sp', name: 'room_id', label: 'в номер', type: 'select', options: rooms.map((r) => [r.id, `№ ${r.number} — ${r.type_name}`]) })}
+            <button class="btn btn--secondary" type="submit">Разделить проживание</button></form>` : ''}
+          <form class="form form--inline" method="post" action="/app/bookings/${b.id}/dates">${csrf(req)}
+            ${field({ prefix: 'dt', name: 'checkin', label: 'Заезд', type: 'date', value: b.checkin, attrs: b.status === 'checked_in' ? 'readonly' : '' })}
+            ${field({ prefix: 'dt', name: 'checkout', label: 'Выезд', type: 'date', value: b.checkout })}
+            <button class="btn btn--secondary" type="submit">Изменить даты</button>
+            <p class="hint span-all">Оплаченные ночи сохраняют свою цену, новые считаются по тарифу «${rate.name}». Можно и на шахматке — потяните за край брони.</p></form>` : ''}
       </section>
       <section class="card">
         <h2 class="h3">Счёт</h2>
@@ -233,7 +245,7 @@ export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
       <a class="btn btn--ghost btn--sm" href="/app/prices?from=${shift(prev, -14)}">← 2 недели</a>
       <form method="get" action="/app/prices" class="inline-form"><label for="grid-from" class="sr-only">С даты</label><input id="grid-from" type="date" name="from" value="${from}"><button class="btn btn--secondary btn--sm">Показать</button></form>
       <a class="btn btn--ghost btn--sm" href="/app/prices?from=${shift(prev, 14)}">2 недели →</a>
-      <p class="muted grid-hint">Цены и остатки для продажи по категориям — то, что видят гости на сайте и каналы. Нажмите на ячейку, чтобы изменить цену, остаток, минимальный срок или закрыть продажи.</p>
+      <p class="muted grid-hint">Цены и остатки для продажи по категориям — то, что видят гости на сайте и каналы. Нажмите на ячейку, чтобы изменить цену, остаток, минимальный срок, закрыть продажи или запретить заезд/выезд. Пометки: «нз» — нет заезда, «нв» — нет выезда, «м3» — минимум 3 ночи.</p>
     </div>
     <div class="grid-wrap" tabindex="0" aria-label="Таблица цен и наличия по категориям">
     <table class="grid" data-grid>
@@ -242,8 +254,8 @@ export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
         ${dates.map((d) => {
           const c = cells[`${r.id}:${d}`];
           return html`<td class="cell ${c.closed ? 'cell--closed' : c.available === 0 ? 'cell--full' : ''} ${isWeekend(d) ? 'we' : ''}">
-            <button type="button" class="cell__btn" data-room="${r.id}" data-room-name="${r.name}" data-date="${d}" data-price="${c.price}" data-available="${c.available}" data-closed="${c.closed}" data-minstay="${c.min_stay}" aria-label="${r.name}, ${fmtDate(d)}: ${c.closed ? 'закрыто' : `свободно ${c.available}`}, ${c.price} ₽">
-              <span class="cell__avail">${c.closed ? '✕' : c.available}</span><span class="cell__price">${c.price}</span>
+            <button type="button" class="cell__btn" data-room="${r.id}" data-room-name="${r.name}" data-date="${d}" data-price="${c.price}" data-available="${c.available}" data-closed="${c.closed}" data-minstay="${c.min_stay}" data-cta="${c.cta}" data-ctd="${c.ctd}" aria-label="${r.name}, ${fmtDate(d)}: ${c.closed ? 'закрыто' : `свободно ${c.available}`}, ${c.price} ₽">
+              <span class="cell__avail">${c.closed ? '✕' : c.available}</span><span class="cell__price">${c.price}</span>${c.cta || c.ctd || c.min_stay > 1 ? html`<span class="inv-flags">${[c.cta ? 'нз' : '', c.ctd ? 'нв' : '', c.min_stay > 1 ? `м${c.min_stay}` : ''].filter(Boolean).join(' ')}</span>` : ''}
             </button></td>`;
         })}</tr>`)}</tbody>
     </table></div>
@@ -254,6 +266,8 @@ export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
         ${field({ prefix: 'cell', name: 'available', label: 'Свободно номеров', type: 'number', attrs: 'min="0" required' })}
         ${field({ prefix: 'cell', name: 'min_stay', label: 'Минимум ночей', type: 'number', attrs: 'min="1" max="30" required' })}
         <label class="check"><input type="checkbox" name="open"><span>В продаже</span></label>
+        <label class="check"><input type="checkbox" name="cta"><span>Запрет заезда в этот день</span></label>
+        <label class="check"><input type="checkbox" name="ctd"><span>Запрет выезда в этот день</span></label>
         <p class="field-error" data-cell-error hidden></p>
         <div class="actions"><button class="btn btn--primary" value="save" data-cell-save>Сохранить</button><button class="btn btn--ghost" value="cancel" formnovalidate>Отмена</button></div>
       </form>
@@ -266,7 +280,7 @@ export function pricesPage({ req, hotel, rooms, dates, cells, from, msg }) {
         ${field({ prefix: 'bulk', name: 'from', label: 'С', type: 'date', value: from, attrs: 'required' })}
         ${field({ prefix: 'bulk', name: 'to', label: 'По (включительно)', type: 'date', value: shift(from, 6), attrs: 'required' })}
         ${field({ prefix: 'bulk', name: 'days', label: 'Дни', type: 'select', options: [['all', 'Все дни'], ['weekend', 'Только пт и сб'], ['weekday', 'Только вс–чт']] })}
-        ${field({ prefix: 'bulk', name: 'action', label: 'Действие', type: 'select', options: [['price', 'Установить цену'], ['percent', 'Изменить цену на %'], ['close', 'Закрыть продажи'], ['open', 'Открыть продажи']] })}
+        ${field({ prefix: 'bulk', name: 'action', label: 'Действие', type: 'select', options: [['price', 'Установить цену'], ['percent', 'Изменить цену на %'], ['minstay', 'Минимум ночей'], ['close', 'Закрыть продажи'], ['open', 'Открыть продажи'], ['cta_on', 'Запретить заезд'], ['cta_off', 'Разрешить заезд'], ['ctd_on', 'Запретить выезд'], ['ctd_off', 'Разрешить выезд']] })}
         ${field({ prefix: 'bulk', name: 'value', label: 'Значение (₽ или %)', type: 'number', attrs: 'step="1"' })}
         <button class="btn btn--primary" type="submit">Применить</button>
       </form>

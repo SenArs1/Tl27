@@ -69,6 +69,20 @@ create table if not exists payments (
   created_at text not null default (datetime('now'))
 );
 create index if not exists payments_booking on payments(booking_id);
+-- Parts of a stay. A booking covers [checkin, checkout); its segments split that
+-- range without gaps, each in one category and (once assigned) one physical room.
+create table if not exists stay_segments (
+  id integer primary key,
+  booking_id integer not null references bookings(id) on delete cascade,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  room_type_id integer not null references room_types(id),
+  room_id integer references rooms(id) on delete set null,
+  start text not null,
+  end text not null,
+  check (end > start)
+);
+create index if not exists segments_booking on stay_segments(booking_id, start);
+create index if not exists segments_room on stay_segments(room_id, start);
 create table if not exists room_types (
   id integer primary key,
   hotel_id integer not null references hotels(id) on delete cascade,
@@ -213,6 +227,15 @@ const COLUMNS = {
   rate_plans: {
     extra_adult_price: 'integer not null default 0',
     extra_child_price: 'integer not null default 0',
+    parent_id: 'integer references rate_plans(id) on delete set null',
+    adjust_type: "text not null default 'pct'",
+    adjust_value: 'integer not null default 0',
+    rounding: 'integer not null default 0',
+    single_discount: 'integer not null default 0',
+  },
+  inventory: {
+    cta: 'integer not null default 0',
+    ctd: 'integer not null default 0',
   },
   extras: { group_id: 'integer references extra_groups(id) on delete set null' },
   bookings: {
@@ -232,15 +255,22 @@ function migrate(db) {
       if (!have.has(col)) db.exec(`alter table ${table} add column ${col} ${def}`);
     }
   }
-  db.exec('create index if not exists bookings_room on bookings(room_id, checkin)');
   db.exec('create index if not exists bookings_created on bookings(hotel_id, created_at)');
   // Older databases kept payment state as a flag only.
   db.exec("update bookings set paid_amount = total where paid = 1 and paid_amount = 0");
+  // Rate discounts became adjustments: "-12%" instead of discount_pct = 12.
+  db.exec("update rate_plans set adjust_type = 'pct', adjust_value = -discount_pct, discount_pct = 0 where discount_pct > 0 and adjust_value = 0");
+  // Bookings from before segments: one segment with the booking's room.
+  db.exec(`insert into stay_segments (booking_id, hotel_id, room_type_id, room_id, start, end)
+    select b.id, b.hotel_id, b.room_type_id, b.room_id, b.checkin, b.checkout from bookings b
+    where not exists (select 1 from stay_segments s where s.booking_id = b.id)`);
   syncPhysicalRooms(db);
 }
 
+const LIVE = "('cancelled','no_show')";
+
 // Gives every room type as many physical rooms as its total_rooms (for databases
-// created before rooms existed), then assigns rooms to bookings that have none.
+// created before rooms existed), then puts unassigned segments into free rooms.
 export function syncPhysicalRooms(db) {
   const types = db.prepare('select * from room_types order by hotel_id, sort, id').all();
   const count = db.prepare('select count(*) n from rooms where room_type_id = ? and active = 1');
@@ -257,24 +287,26 @@ export function syncPhysicalRooms(db) {
       have++;
     }
   }
-  const unassigned = db.prepare("select * from bookings where room_id is null and status not in ('cancelled','no_show') order by checkin, id").all();
-  for (const b of unassigned) {
-    const r = findFreeRoom(db, b.room_type_id, b.checkin, b.checkout, b.id);
-    if (r) db.prepare('update bookings set room_id = ? where id = ?').run(r.id, b.id);
+  const unassigned = db.prepare(`select s.* from stay_segments s join bookings b on b.id = s.booking_id
+    where s.room_id is null and b.status not in ${LIVE} order by s.start, s.id`).all();
+  for (const seg of unassigned) {
+    const r = findFreeRoom(db, seg.room_type_id, seg.start, seg.end, seg.booking_id);
+    if (r) db.prepare('update stay_segments set room_id = ? where id = ?').run(r.id, seg.id);
   }
 }
 
 // First room of the type (by sort order) with no overlapping stay. null when none.
-export function findFreeRoom(db, roomTypeId, checkin, checkout, ignoreBookingId = 0) {
+export function findFreeRoom(db, roomTypeId, start, end, ignoreBookingId = 0) {
   return db.prepare(`select r.* from rooms r where r.room_type_id = ? and r.active = 1 and r.status != 'repair'
-    and not exists (select 1 from bookings b where b.room_id = r.id and b.id != ? and b.status not in ('cancelled','no_show')
-      and b.checkin < ? and b.checkout > ?)
-    order by r.sort, r.number limit 1`).get(roomTypeId, ignoreBookingId, checkout, checkin) || null;
+    and not exists (select 1 from stay_segments s join bookings b on b.id = s.booking_id
+      where s.room_id = r.id and s.booking_id != ? and b.status not in ${LIVE} and s.start < ? and s.end > ?)
+    order by r.sort, r.number limit 1`).get(roomTypeId, ignoreBookingId, end, start) || null;
 }
 
-export function roomIsFree(db, roomId, checkin, checkout, ignoreBookingId = 0) {
-  return !db.prepare(`select 1 from bookings where room_id = ? and id != ? and status not in ('cancelled','no_show')
-    and checkin < ? and checkout > ?`).get(roomId, ignoreBookingId, checkout, checkin);
+// Whether a room is free for [start, end), not counting the booking being changed.
+export function roomIsFree(db, roomId, start, end, ignoreBookingId = 0) {
+  return !db.prepare(`select 1 from stay_segments s join bookings b on b.id = s.booking_id
+    where s.room_id = ? and s.booking_id != ? and b.status not in ${LIVE} and s.start < ? and s.end > ?`).get(roomId, ignoreBookingId, end, start);
 }
 
 export function openDb(file = process.env.DB_FILE || 'data/stayra.db') {

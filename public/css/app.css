@@ -463,3 +463,16 @@ tr.we { background: #fbf6ea; }
   .bars li { grid-template-columns: 1fr 60px; }
   .bars li span:last-child { grid-column: 1 / -1; }
 }
+.chess__handle { position: absolute; top: 0; bottom: 0; width: 9px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.chess__handle--l { left: 0; }
+.chess__handle--r { right: 0; }
+.chess__handle::after { content: ""; position: absolute; top: 9px; bottom: 9px; left: 3px; width: 3px; border-radius: 2px; background: rgba(255,255,255,.75); }
+.chess__bar.resizing { outline: 2px dashed var(--accent); z-index: 5; pointer-events: none; }
+.chess__bar.cont-l { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 3px dotted rgba(255,255,255,.8); }
+.chess__bar.cont-r { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 3px dotted rgba(255,255,255,.8); }
+.segments { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 10px; }
+.segments li { border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 12px; display: grid; gap: 8px; }
+.inv-flags { display: block; font-size: 10px; font-weight: 800; color: var(--danger); letter-spacing: .02em; }
+.rate-derived { color: var(--text-muted); font-size: 13px; }
+/* Sidebar colour reaches the bottom of long pages */
+@media (min-width: 861px) { .app-shell { background: linear-gradient(to right, var(--dark) 240px, var(--surface) 240px); } }

@@ -54,12 +54,12 @@ export function roomsPage({ req, hotel, types, rooms, rates, groups, extras, pro
 
     <section class="card" id="rates">
       <h2 class="h3">Тарифы</h2>
-      <p class="muted">Цена тарифа = цена за номер из «Цен и наличия» − скидка тарифа + доп. места + питание на каждого гостя.</p>
-      <div class="table-wrap" tabindex="0" role="region" aria-label="Тарифы"><table class="table"><thead><tr><th scope="col">Тариф</th><th scope="col">Питание</th><th scope="col">Доп. место взр. / реб.</th><th scope="col">Отмена</th><th scope="col">Скидка</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
-      <tbody>${rates.map((r) => html`<tr><td>${r.name}</td><td>${MEALS.find((m) => m[0] === r.meal)[1]}${r.meal_price ? ` (${rub(r.meal_price)}/гость)` : ''}</td>
-        <td>${rub(r.extra_adult_price)} / ${rub(r.extra_child_price)}</td><td>${r.refundable ? 'бесплатная' : 'без возврата'}</td><td>${r.discount_pct}%</td><td>${r.active ? 'активен' : 'выключен'}</td>
-        <td><details class="row-edit"><summary>Изменить</summary>${rateForm(req, r, `/app/rooms/rates/${r.id}`)}</details></td></tr>`)}</tbody></table></div>
-      ${addBlock('Добавить тариф', rateForm(req, {}, '/app/rooms/rates'))}
+      <p class="muted">Базовый тариф берёт цену за ночь из «Цен и наличия». Производный считается от другого тарифа: например, «−12% от Гибкого, округлить до 10 ₽». Меняете цену в «Ценах и наличии» — пересчитываются все тарифы. Цепочка — не глубже трёх уровней.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Тарифы"><table class="table"><thead><tr><th scope="col">Тариф</th><th scope="col">Цена</th><th scope="col">Питание</th><th scope="col">Доп. место взр. / реб.</th><th scope="col">Отмена</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
+      <tbody>${rates.map((r) => html`<tr><td>${r.name}</td><td class="rate-derived">${derivation(r, rates)}</td><td>${MEALS.find((m) => m[0] === r.meal)[1]}${r.meal_price ? ` (${rub(r.meal_price)}/гость)` : ''}</td>
+        <td>${rub(r.extra_adult_price)} / ${rub(r.extra_child_price)}</td><td>${r.refundable ? 'бесплатная' : 'без возврата'}</td><td>${r.active ? 'активен' : 'выключен'}</td>
+        <td><details class="row-edit"><summary>Изменить</summary>${rateForm(req, r, `/app/rooms/rates/${r.id}`, rates)}</details></td></tr>`)}</tbody></table></div>
+      ${addBlock('Добавить тариф', rateForm(req, {}, '/app/rooms/rates', rates))}
     </section>
 
     <section class="card" id="extras">
@@ -122,13 +122,29 @@ function typeForm(req, t, action) {
     <div class="actions"><button class="btn btn--primary" type="submit">Сохранить</button>${cancel}</div></form>`;
 }
 
-function rateForm(req, r, action) {
+// "−12% от «Гибкий», округл. до 10 ₽" — how a rate's nightly price is made.
+export function derivation(r, rates) {
+  const parent = rates.find((x) => x.id === r.parent_id);
+  const v = r.adjust_value || 0;
+  const adj = v ? `${v > 0 ? '+' : '−'}${r.adjust_type === 'fixed' ? rub(Math.abs(v)) : `${Math.abs(v)}%`}` : '';
+  const parts = [parent ? `${adj || '='} от «${parent.name}»` : `базовая цена${adj ? ` ${adj}` : ''}`];
+  if (r.rounding) parts.push(`округл. до ${r.rounding} ₽`);
+  if (r.single_discount) parts.push(`одному гостю −${rub(r.single_discount)}/ночь`);
+  return parts.join(', ');
+}
+
+function rateForm(req, r, action, rates = []) {
   const pfx = action.replace(/\W+/g, '-').replace(/^-/, '');
+  const parents = rates.filter((x) => x.id !== r.id);
   return html`<form class="form form--grid" method="post" action="${action}">${csrf(req)}
     ${field({ prefix: pfx, name: 'name', label: 'Название', value: r.name, attrs: 'required maxlength="80"' })}
     ${field({ prefix: pfx, name: 'meal', label: 'Питание', type: 'select', value: r.meal || 'none', options: MEALS })}
     ${field({ prefix: pfx, name: 'meal_price', label: 'Питание, ₽ за гостя в ночь', type: 'number', value: r.meal_price ?? 0, attrs: 'min="0"' })}
-    ${field({ prefix: pfx, name: 'discount_pct', label: 'Скидка от базовой цены, %', type: 'number', value: r.discount_pct ?? 0, attrs: 'min="0" max="90"' })}
+    ${field({ prefix: pfx, name: 'parent_id', label: 'Считать от', type: 'select', value: r.parent_id || '', options: [['', 'Базовой цены категории'], ...parents.map((x) => [x.id, `тарифа «${x.name}»`])] })}
+    ${field({ prefix: pfx, name: 'adjust_value', label: 'Изменение (− скидка, + наценка)', type: 'number', value: r.adjust_value ?? 0, attrs: 'min="-100000" max="100000"' })}
+    ${field({ prefix: pfx, name: 'adjust_type', label: 'В чём', type: 'select', value: r.adjust_type || 'pct', options: [['pct', '%'], ['fixed', '₽ за ночь']] })}
+    ${field({ prefix: pfx, name: 'rounding', label: 'Округлять до', type: 'select', value: r.rounding ?? 0, options: [[0, 'не округлять'], [10, '10 ₽'], [50, '50 ₽'], [100, '100 ₽']] })}
+    ${field({ prefix: pfx, name: 'single_discount', label: 'Скидка одному гостю, ₽/ночь', type: 'number', value: r.single_discount ?? 0, attrs: 'min="0"', hint: 'Одноместное размещение' })}
     ${field({ prefix: pfx, name: 'extra_adult_price', label: 'Доп. место, взрослый, ₽/ночь', type: 'number', value: r.extra_adult_price ?? 0, attrs: 'min="0"' })}
     ${field({ prefix: pfx, name: 'extra_child_price', label: 'Доп. место, ребёнок, ₽/ночь', type: 'number', value: r.extra_child_price ?? 0, attrs: 'min="0"' })}
     ${field({ prefix: pfx, name: 'description', label: 'Условия для гостя', type: 'textarea', value: r.description })}

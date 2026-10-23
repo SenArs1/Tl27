@@ -30,6 +30,9 @@ export function scope(db, hotelId) {
   };
 }
 
-// Bookings joined with category and room number — the shape most lists need.
-export const BOOKING_LIST = `select b.*, t.name as room_name, r.number as room_number from bookings b
-  join room_types t on t.id = b.room_type_id left join rooms r on r.id = b.room_id where b.hotel_id = ?`;
+// Bookings joined with category and room numbers ("201 → 305" for a split stay) —
+// the shape most lists need. unassigned > 0 means some part of the stay has no room.
+export const BOOKING_LIST = `select b.*, t.name as room_name,
+  (select group_concat(number, ' → ') from (select r.number from stay_segments s join rooms r on r.id = s.room_id where s.booking_id = b.id order by s.start)) as room_number,
+  (select count(*) from stay_segments s where s.booking_id = b.id and s.room_id is null) as unassigned
+  from bookings b join room_types t on t.id = b.room_type_id where b.hotel_id = ?`;

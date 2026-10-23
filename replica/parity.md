@@ -1,12 +1,12 @@
-## Parity: 93.6 / 100
+## Parity: 96.3 / 100
 
-features 93.6  (61 counted, must-haves 32 of 32 done)
+features 96.3  (61 counted, must-haves 32 of 32 done)
 
 ## By area, weakest first
-- rates                         66.7  (3 features)
+- rates                         83.3  (3 features)
 - settings                      85.7  (3 features)
 - reports                       90.0  (5 features)
-- extranet                      91.8  (24 features)
+- extranet                      96.7  (24 features)
 - booking engine                98.2  (11 features)
 - marketing                    100.0  (8 features)
 - support                      100.0  (1 features)
@@ -16,10 +16,7 @@ features 93.6  (61 counted, must-haves 32 of 32 done)
 
 ## Missing, in build order
 - [should] extranet: Booking change history, no  (next)
-- [should] extranet: Extend / shorten stay by dragging, no  (next)
 - [should] rates: Child age groups with separate prices, partial  (one age limit for now)
-- [could] extranet: Split stay into segments when moving mid-stay, no  (next)
-- [could] rates: Derived rates and CTA/CTD restrictions, no  (next)
 - [could] reports: MVD guest list and e-registration, no  (regulated; next)
 - [could] settings: Housekeeping and investor roles, no  (next)
 - [could] booking engine: Loyalty program, partial  (only described on the product page; no member accounts)
