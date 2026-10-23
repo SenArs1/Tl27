@@ -34,8 +34,16 @@ test('chessboard: click an empty cell to book, drag the booking to another room'
   await page.goto(`/app/chess?from=${day(90)}&days=14&sort=category`);
   const bar = page.locator('.chess__bar', { hasText: 'Шахматов Пётр' });
   await expect(page.locator('[data-room-number="402"]').locator('.chess__bar')).toHaveCount(1);
-  await bar.dragTo(page.locator('[data-room-number="404"] .chess__cell').first());
-  await expect(page.getByText('Перенесено в номер 404')).toBeVisible();
+  await bar.scrollIntoViewIfNeeded();
+  // drop on the same days of room 404: only the room changes
+  const startCell = page.locator('[data-room-number="404"]').locator(`.chess__cell[data-date="${day(92)}"]`);
+  const box = await bar.boundingBox();
+  await bar.dragTo(startCell, { sourcePosition: { x: 24, y: box.height / 2 }, targetPosition: { x: 24, y: 20 } });
+  const dlg = page.locator('[data-move-dialog]');
+  await expect(dlg).toBeVisible();
+  await expect(dlg.getByText(/Станет:.*№ 404/)).toBeVisible();
+  await dlg.getByRole('button', { name: 'Применить' }).click();
+  await expect(page.getByText('Бронь перенесена')).toBeVisible();
   await expect(page.locator('[data-room-number="404"]').locator('.chess__bar', { hasText: 'Шахматов Пётр' })).toHaveCount(1);
   await page.screenshot({ path: 'replica/clone-screens/S24-chess-desktop.png', fullPage: false });
 });

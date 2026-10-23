@@ -266,6 +266,7 @@ const COLUMNS = {
     legal_name: "text not null default ''",
     grid_sort: "text not null default 'category'",
     grid_days: 'integer not null default 14',
+    placement_mode: "text not null default 'auto'",
   },
   users: { is_platform_admin: 'integer not null default 0' },
   sessions: { hotel_id: 'integer' },
@@ -292,6 +293,8 @@ const COLUMNS = {
     created_by: 'integer',
     channel_ref: 'text',
     children_ages: "text not null default '[]'",
+    checked_in_at: 'text',
+    checked_out_at: 'text',
   },
 };
 
@@ -368,14 +371,27 @@ export function openDb(file = process.env.DB_FILE || 'data/stayra.db') {
   return db;
 }
 
-// Runs fn inside BEGIN IMMEDIATE so concurrent writers are serialised.
+// Runs fn inside BEGIN IMMEDIATE so concurrent writers are serialised. Calls nest:
+// an inner tx() inside an outer one simply runs in the outer transaction, so
+// operations can be combined (move room + change dates) and still commit together.
 export function tx(db, fn) {
+  if (db._txDepth) {
+    db._txDepth++;
+    try {
+      return fn();
+    } finally {
+      db._txDepth--;
+    }
+  }
   db.exec('begin immediate');
+  db._txDepth = 1;
   try {
     const out = fn();
+    db._txDepth = 0;
     db.exec('commit');
     return out;
   } catch (e) {
+    db._txDepth = 0;
     db.exec('rollback');
     throw e;
   }

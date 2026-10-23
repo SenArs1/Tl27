@@ -454,7 +454,7 @@ tr.we { background: #fbf6ea; }
 .chess__bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 0; }
 .chess__bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0; }
 .chess__guest { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chess__bar small { font-size: 11px; opacity: .9; white-space: nowrap; }
+.chess__bar small { font-size: 11px; white-space: nowrap; }
 .chess__debt { position: absolute; right: 4px; top: 3px; background: var(--accent); color: var(--text); border-radius: 50%; width: 15px; height: 15px; font-size: 10px; font-weight: 800; display: inline-grid; place-items: center; }
 .chess-legend .chess__debt { position: static; }
 @media (max-width: 860px) {
@@ -483,3 +483,69 @@ tr.we { background: #fbf6ea; }
 .child-prices legend, .child-prices .hint { grid-column: 1 / -1; }
 .mvd-bulk { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
 .table td.late { color: var(--danger); font-weight: 700; }
+
+/* ---------- v5: chessboard — stats, filters, colours, side panel ---------- */
+.chess-stats { padding: 12px 16px; }
+.chess-stats summary { cursor: pointer; font-weight: 700; }
+.chess-stats__row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+.chess-stats__row > div { background: var(--surface); border-radius: var(--r-md); padding: 8px 12px; display: grid; }
+.chess-stats__row span { font-size: 13px; color: var(--text-muted); }
+.chess-stats__row strong { font-size: 22px; }
+.chess-stats__row small { color: var(--text-muted); }
+.chess-stats__row .is-alert { background: #fde8e6; }
+.chess-stats__row .is-alert strong { color: var(--danger); }
+.chess-tools { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; padding: 12px 16px; }
+.chess-tools[hidden] { display: none; }
+.chess-find { min-width: 240px; flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chips legend { font-size: 13px; font-weight: 600; margin-bottom: 4px; width: 100%; }
+.chip { display: inline-flex; cursor: pointer; }
+.chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.chip span { border: 1.5px solid var(--border-input); border-radius: var(--r-pill); padding: 4px 12px; font-size: 13px; font-weight: 600; }
+.chip input:checked + span { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.chip input:focus-visible + span { outline: 3px solid var(--brand); outline-offset: 2px; }
+.chess-tools__count { margin: 0; }
+.chess-view { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; }
+.chess-placement { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; margin-left: auto; }
+.chess-placement select { width: auto; min-height: 34px; padding: 4px 8px; }
+.chess-hint { margin: 0; font-size: 13px; }
+.chess-legend .legend-swatch { display: inline-block; width: 22px; height: 12px; border-radius: 4px; }
+.src-site-sw { background: #2f7d62; }
+.src-channel-sw { background: #f2b33d; }
+.inhouse-sw { background: #6b3fa0; }
+.out-sw { background: #5f6b66; }
+.unassigned-sw { background: #0f766e; outline: 2px dashed #fff; outline-offset: -3px; }
+.overdue-sw { background: #b42318; }
+/* Bars: source decides the colour of an expected stay, status the rest. White text ≥ 4.5:1. */
+.chess__bar--confirmed.src-site, .chess__bar--confirmed.src-manual { background: #2f7d62; }
+.chess__bar--confirmed.src-channel { background: #f2b33d; color: #1b1f1d; }
+.chess__bar--confirmed.src-channel:hover { color: #1b1f1d; }
+.chess__bar--checked_in { background: #6b3fa0; }
+.chess__bar--checked_out { background: #5f6b66; }
+.chess__row--unassigned .chess__bar { background: #0f766e; color: #fff; outline: 2px dashed rgba(255,255,255,.7); outline-offset: -3px; }
+.chess__bar.is-overdue { background: #b42318; color: #fff; }
+.chess__bar.is-dim { opacity: .18; }
+.chess__bar.is-hit { box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0,0,0,.25); z-index: 4; }
+.chess__row.is-repair .chess__cell { background: repeating-linear-gradient(135deg, #eceeec 0 6px, #fff 6px 12px); }
+.chess__row[hidden] { display: none; }
+.chess__toggle { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; display: inline-flex; gap: 6px; align-items: center; }
+.chess__chev { font-size: 12px; color: var(--text-muted); transition: transform .15s; display: inline-block; }
+.chess__toggle[aria-expanded="false"] .chess__chev { transform: rotate(-90deg); }
+/* Side panel */
+.peek { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(440px, 100vw); border: 0; border-radius: 0; padding: 20px; box-shadow: var(--sh-pop); overflow-y: auto; }
+.peek::backdrop { background: rgba(18,32,27,.35); }
+.peek__head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.peek__head h2 { margin: 0; }
+.peek__close { background: none; border: 0; font-size: 20px; cursor: pointer; padding: 4px 8px; color: var(--text); }
+.peek__status { margin: 6px 0 0; }
+.peek .kv { grid-template-columns: max-content 1fr; }
+.peek .debt { color: var(--danger); }
+.peek__actions { display: grid; gap: 14px; }
+.peek__form { display: grid; gap: 8px; padding: 12px; background: var(--surface); border-radius: var(--r-md); }
+.peek__form label { font-weight: 600; font-size: 14px; }
+.peek__form--inline { grid-template-columns: 1fr; }
+.peek__pay { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.peek__pay select { width: auto; }
+.move-dialog p { margin: 4px 0; }
+.badge--confirmed { background: #e3f3ea; color: var(--success); }
+@media (max-width: 860px) { .chess-placement { margin-left: 0; } }

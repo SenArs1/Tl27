@@ -2,12 +2,12 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { tx, findFreeRoom } from '../db.js';
 import { requireUser, requireOwner, checkCsrf, verifyPassword, hashPassword, createSession, sessionCookie, clearCookie, userHotels } from '../lib/auth.js';
-import { childGroups, parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, moveSegment, splitStay, changeDates, segmentsOf, addPayment, validateGuest, ensureInventory, logToChannels, ratesMap, BookingError, ACTIVE } from '../lib/booking.js';
-import { addDays, diffDays, isIsoDate, isWeekend, nightsOf, todayIn, monthBounds } from '../lib/dates.js';
+import { childGroups, relocate, assignUnassigned, parseSearch, createBooking, cancelBooking, markNoShow, moveBooking, moveSegment, splitStay, changeDates, segmentsOf, addPayment, validateGuest, ensureInventory, logToChannels, ratesMap, BookingError, ACTIVE } from '../lib/booking.js';
+import { addDays, diffDays, isIsoDate, isWeekend, nightsOf, todayIn, timeIn, monthBounds } from '../lib/dates.js';
 import { createHotel, addPhysicalRooms, recountRooms, PROPERTY_TYPES } from '../lib/hotels.js';
 import { scope, BOOKING_LIST } from '../lib/scope.js';
 import * as A from '../views/app.js';
-import { chessPage, SORTS } from '../views/chess.js';
+import { chessPage, peekPanel, isOverdue, SORTS } from '../views/chess.js';
 import { roomsPage } from '../views/rooms.js';
 import * as S from '../views/settings.js';
 import { reportsPage } from '../views/reports.js';
@@ -165,7 +165,26 @@ export function appRouter(db, { showDemo }) {
       ensureInventory(db, t, dates);
       for (const c of db.prepare('select * from inventory where room_type_id = ? and date >= ? and date < ?').all(t.id, from, to)) free[`${t.id}:${c.date}`] = c;
     }
-    res.send(chessPage({ req, hotel: h, from, days, sort, typeFilter, types, rooms, bookings, free, today: req.today, msg: req.msg, channels: req.s.channels() }));
+    // Today's strip above the board.
+    const t = req.today;
+    const nowTime = timeIn(h.timezone);
+    const one = (sql, ...p) => db.prepare(sql).get(h.id, ...p).n;
+    const roomsLive = rooms.filter((r) => r.status !== 'repair').length;
+    const occupied = one(`select count(*) n from stay_segments s join bookings b on b.id = s.booking_id where s.hotel_id = ? and s.start <= ? and s.end > ? and b.status in ('confirmed','checked_in')`, t, t);
+    const live = db.prepare(`select * from bookings where hotel_id = ? and status in ('confirmed','checked_in') and checkin <= ? and checkout >= ?`).all(h.id, addDays(t, 1), addDays(t, -30));
+    const stats = {
+      rooms: roomsLive, occupied, pct: roomsLive ? Math.round((occupied / roomsLive) * 100) : 0,
+      arrivals: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and status in ('confirmed','checked_in','checked_out')`, t),
+      arrivalsLeft: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and status = 'confirmed'`, t),
+      departures: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and status in ('checked_in','checked_out')`, t),
+      departuresLeft: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and status = 'checked_in'`, t),
+      inhouse: one(`select coalesce(sum(adults + children), 0) n from bookings where hotel_id = ? and status = 'checked_in'`),
+      free: Math.max(0, roomsLive - occupied),
+      overdue: live.filter((b) => isOverdue(b, t, nowTime, h)).length,
+      dirty: rooms.filter((r) => r.status === 'dirty').length,
+      repair: rooms.filter((r) => r.status === 'repair').length,
+    };
+    res.send(chessPage({ req, hotel: h, from, days, sort, typeFilter, types, rooms, bookings, free, today: t, nowTime, stats, msg: req.msg, channels: req.s.channels() }));
   });
 
   // ---------- bookings ----------
@@ -230,25 +249,51 @@ export function appRouter(db, { showDemo }) {
     if (!b) return next();
     res.send(bookingPage(req, b));
   });
-  const TRANSITIONS = { confirmed: ['checked_in', 'no_show', 'cancelled'], checked_in: ['checked_out'] };
+  const TRANSITIONS = { confirmed: ['checked_in', 'no_show', 'cancelled'], checked_in: ['checked_out'], checked_out: ['checked_in'] };
+  // Where to go after an action: a page inside the cabinet the form came from, else the booking card.
+  const retTo = (req, fallback) => {
+    const v = String(req.body.back || '');
+    return v.startsWith('/app') && !v.startsWith('//') && !/[\r\n]/.test(v) ? v : fallback;
+  };
+  // "2026-10-23T14:05" from a datetime-local field; anything else falls back to now.
+  const stamp = (v) => (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v || '') ? `${v.replace('T', ' ')}:00` : new Date().toISOString().slice(0, 19).replace('T', ' '));
   r.post('/bookings/:id/status', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
     const to = String(req.body.status || '');
-    const ret = req.body.back === '/app' ? '/app' : `/app/bookings/${b.id}`;
+    const ret = retTo(req, `/app/bookings/${b.id}`);
     if (!(TRANSITIONS[b.status] || []).includes(to)) return back(res, ret, 'Такой переход статуса невозможен', true);
     const segs = segmentsOf(db, b.id);
     if (to === 'checked_in' && segs.some((x) => !x.room_id)) return back(res, ret, 'Сначала назначьте номер — на шахматке или в карточке брони', true);
-    if (to === 'cancelled') cancelBooking(db, b);
-    else if (to === 'no_show') markNoShow(db, b);
-    else {
-      db.prepare('update bookings set status = ? where id = ?').run(to, b.id);
-      const last = segs[segs.length - 1];
-      if (to === 'checked_out' && last && last.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(last.room_id);
-    }
+    const undo = b.status === 'checked_out' && to === 'checked_in';
+    const reason = str(req.body.reason, 200);
+    if (undo && reason.length < 3) return back(res, ret, 'Укажите причину отмены выселения', true);
+    // Optional payment taken together with check-in or check-out.
+    const amount = int(req.body.pay_amount);
+    const method = ['cash', 'card', 'transfer'].includes(req.body.pay_method) ? req.body.pay_method : 'card';
+    if (amount < 0 || amount > b.total - b.paid_amount) return back(res, ret, 'Сумма оплаты больше долга по брони', true);
+    tx(db, () => {
+      if (to === 'cancelled') cancelBooking(db, b);
+      else if (to === 'no_show') markNoShow(db, b);
+      else {
+        const last = segs[segs.length - 1];
+        if (to === 'checked_in' && !undo) db.prepare('update bookings set status = ?, checked_in_at = ? where id = ?').run(to, stamp(req.body.at), b.id);
+        if (undo) {
+          db.prepare("update bookings set status = 'checked_in', checked_out_at = null, comment = trim(comment || char(10) || ?) where id = ?").run(`Отмена выселения: ${reason}`, b.id);
+          if (last && last.room_id) db.prepare("update rooms set status = 'clean' where id = ? and status = 'dirty'").run(last.room_id);
+        }
+        if (to === 'checked_out') {
+          db.prepare('update bookings set status = ?, checked_out_at = ? where id = ?').run(to, stamp(req.body.at), b.id);
+          if (last && last.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(last.room_id);
+        }
+      }
+      if (amount > 0 && ['checked_in', 'checked_out'].includes(to)) addPayment(db, b, amount, method, to === 'checked_in' ? 'При заселении' : 'При выезде', req.user.id);
+    });
     const docs = db.prepare('select count(*) n from booking_guests where booking_id = ?').get(b.id).n;
-    const docsNote = to === 'checked_in' && docs < b.adults + b.children ? '. Внесите документы гостей для МВД' : '';
-    back(res, ret + (docsNote && ret !== '/app' ? '#guests' : ''), { checked_in: `${b.guest_name} заселён${docsNote}`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to]);
+    const docsNote = to === 'checked_in' && !undo && docs < b.adults + b.children ? '. Внесите документы гостей для МВД' : '';
+    const text = undo ? `Выселение отменено: ${b.guest_name} снова проживает`
+      : { checked_in: `${b.guest_name} заселён${amount ? `, оплата ${amount.toLocaleString('ru-RU')} ₽ принята` : ''}${docsNote}`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to];
+    back(res, ret + (docsNote && ret.startsWith('/app/bookings/') ? '#guests' : ''), text);
   });
   // Shared reply for the chessboard (JSON) and the booking card (form + redirect).
   const reply = (req, res, b, fn, okText) => {
@@ -284,6 +329,44 @@ export function appRouter(db, { showDemo }) {
     reply(req, res, b, () => changeDates(db, req.hotelRow, b, checkin, checkout),
       (nb) => `Даты изменены: ${nb.checkin.split('-').reverse().join('.')} — ${nb.checkout.split('-').reverse().join('.')}, сумма ${nb.total.toLocaleString('ru-RU')} ₽`);
   });
+  // ---------- chessboard actions ----------
+  // Drag on the chessboard: room and/or dates. ?dry=1 answers with before/after for the confirm dialog.
+  r.post('/bookings/:id/relocate', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const body = req.body || {};
+    const room = body.room_id ? req.s.room(body.room_id) : null;
+    if (body.room_id && !room) return res.status(404).json({ error: 'Номер не найден' });
+    try {
+      const result = relocate(db, req.hotelRow, b, {
+        segmentId: int(body.segment_id), roomId: body.room_id === undefined ? undefined : room ? room.id : null,
+        checkin: isIsoDate(body.checkin) ? body.checkin : undefined, checkout: isIsoDate(body.checkout) ? body.checkout : undefined,
+        keepPrice: body.keep_price !== false && body.keep_price !== 'false', today: req.today, dryRun: req.query.dry === '1',
+      });
+      res.json({ ok: true, ...result, message: req.query.dry === '1' ? '' : 'Бронь перенесена' });
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      res.status(409).json({ error: e.message });
+    }
+  });
+  // Side panel of the chessboard: the booking at a glance with quick actions.
+  r.get('/bookings/:id/peek', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const segs = db.prepare('select s.*, r.number from stay_segments s left join rooms r on r.id = s.room_id where s.booking_id = ? order by s.start').all(b.id);
+    res.set('Cache-Control', 'no-store');
+    res.send(peekPanel({ req, b, segs, rate: req.s.rate(b.rate_plan_id), channels: req.s.channels(), back: retTo({ body: { back: req.query.back } }, '/app/chess'), nowLocal: `${req.today}T${timeIn(req.hotelRow.timezone)}` }).value);
+  });
+  r.post('/chess/assign', (req, res) => {
+    const { placed, left } = assignUnassigned(db, req.user.hotel_id);
+    back(res, retTo(req, '/app/chess'), placed ? `Распределено броней: ${placed}${left ? `, без свободного номера на весь срок осталось ${left}` : ''}` : 'Нечего распределять или нет свободных номеров на весь срок', !placed);
+  });
+  r.post('/chess/placement', (req, res) => {
+    const mode = req.body.mode === 'manual' ? 'manual' : 'auto';
+    db.prepare('update hotels set placement_mode = ? where id = ?').run(mode, req.user.hotel_id);
+    back(res, retTo(req, '/app/chess'), mode === 'manual' ? 'Новые брони будут попадать в строку «Без номера»' : 'Новые брони сразу получают свободный номер');
+  });
+
   // ---------- guests & documents (MVD) ----------
   const guestsOf = (b) => db.prepare('select * from booking_guests where booking_id = ? order by id').all(b.id);
   const guestsBlock = (req, b, extra = {}) => {
@@ -359,9 +442,10 @@ export function appRouter(db, { showDemo }) {
     if (!b) return next();
     const amount = int(req.body.amount);
     const method = ['cash', 'card', 'transfer'].includes(req.body.method) ? req.body.method : 'cash';
-    if (amount < 1 || amount > 10000000) return back(res, `/app/bookings/${b.id}`, 'Укажите сумму', true);
+    if (amount < 1 || amount > 10000000) return back(res, retTo(req, `/app/bookings/${b.id}`), 'Укажите сумму', true);
+    if (amount > b.total - b.paid_amount) return back(res, retTo(req, `/app/bookings/${b.id}`), 'Сумма больше долга по брони', true);
     addPayment(db, b, amount, method, '', req.user.id);
-    back(res, `/app/bookings/${b.id}`, 'Оплата принята');
+    back(res, retTo(req, `/app/bookings/${b.id}`), 'Оплата принята');
   });
 
   // ---------- prices & availability (per category) ----------

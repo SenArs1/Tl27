@@ -88,3 +88,17 @@ Bugs found by tests in v4 and fixed:
 | B13 | S3 | the reports page didn't show messages after an action | `msg` passed into the reports page |
 
 Tests: 41 unit/HTTP (+6: ages, placement, child prices, documents, deadlines, MVD and isolation), 36 e2e + 2 deliberate skips.
+
+## Version 5 (chessboard from the competitor's public knowledge base, 2026-10-23)
+
+Comparison and what was done: `chess-gap.md`.
+
+Bugs found in v5 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B14 | S3 | the small text on bars (guests, source) was translucent and failed the contrast check | opacity removed |
+| B15 | S4 | the category collapse arrow ended up in the button's name for screen readers | arrow moved to an `aria-hidden` element |
+| B16 | — | during development: a batch edit of `db.js` broke the file (insertion with an empty pattern) | caught by tests at once, file restored from git, edit re-applied |
+
+Tests: 48 unit/HTTP (+7: move with preview, price recalculation, in-house move, placement mode, overdue, panel/actions/isolation), 41 e2e + 3 deliberate skips.

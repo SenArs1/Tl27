@@ -66,3 +66,9 @@ Housekeeping and investor roles,settings,could,yes,no,next
 Self sign-up creates an isolated property,platform,must,yes,yes,
 Several properties per user with a switcher (chains),platform,should,yes,yes,
 Platform admin: all tenants and leads,platform,should,yes,yes,/admin
+"Chessboard today strip, filters, search, collapsible categories",extranet,should,yes,yes,v5
+Chessboard side panel with quick actions,extranet,should,yes,yes,"check-in/out with time and payment, undo check-out"
+Drag to room and dates with before/after preview and keep-price option,extranet,should,yes,yes,
+Placement mode for new bookings (auto / unassigned row) and auto-assign,extranet,could,yes,yes,
+Hourly bookings,extranet,could,yes,no,separate mode
+Booking tags and notes with due dates,extranet,should,yes,no,"next, with the booking card"

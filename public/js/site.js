@@ -126,7 +126,11 @@
   }
 
   // Confirm dialogs on destructive forms
-  $$('form[data-confirm]').forEach((f) => f.addEventListener('submit', (e) => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
+  // Delegated, so it also covers forms loaded later (the chessboard side panel).
+  document.addEventListener('submit', (e) => {
+    const f = e.target.closest('form[data-confirm]');
+    if (f && !confirm(f.dataset.confirm)) e.preventDefault();
+  });
 
   // Copy embed code
   $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
@@ -148,16 +152,147 @@
     if (s) s.focus();
   }));
 
-  // Chessboard: drag a booking onto another room row to move it
+  // ---------- Chessboard ----------
   const chess = $('[data-chess]');
   if (chess) {
     const csrfToken = $('[data-csrf]').dataset.csrf;
-    let dragged = null;
-    let resizing = null;
+    const from = chess.dataset.from;
+    const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+    const diff = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+    const idxOf = (d) => diff(from, d);
+    const ru = (d) => d.split('-').reverse().join('.');
+    const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } } };
+    const cellAt = (x, y) => document.elementsFromPoint(x, y).find((el) => el.classList && el.classList.contains('chess__cell'));
+    const go = (message, isError) => {
+      const u = new URL(location.href);
+      u.searchParams.set('m', message);
+      if (isError) u.searchParams.set('e', '1'); else u.searchParams.delete('e');
+      location.href = u.toString();
+    };
+    const post = async (url, body) => {
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({ error: 'Не удалось выполнить действие' }));
+      return { ok: r.ok, ...j };
+    };
+
+    // Remembered "Сегодня" strip state
+    $$('details[data-remember]').forEach((d) => {
+      const k = `chess:${d.dataset.remember}`;
+      if (store.get(k, true) === false) d.open = false;
+      d.addEventListener('toggle', () => store.set(k, d.open));
+    });
+
+    // Collapse a category: its rooms hide, the free-rooms row stays — a compact availability table.
+    const collapsed = new Set(store.get('chess:collapsed', []));
+    const applyCollapse = () => {
+      $$('[data-collapse]', chess).forEach((btn) => {
+        const id = btn.dataset.collapse;
+        const closed = collapsed.has(id);
+        btn.setAttribute('aria-expanded', String(!closed));
+        $$(`.chess__row[data-type="${id}"]`, chess).forEach((row) => { row.hidden = closed; });
+      });
+    };
+    chess.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-collapse]');
+      if (!btn) return;
+      const id = btn.dataset.collapse;
+      if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+      store.set('chess:collapsed', [...collapsed]);
+      applyCollapse();
+    });
+    applyCollapse();
+
+    // Filters and search: bookings that do not match fade out.
+    const tools = $('[data-chess-tools]');
+    tools.hidden = false;
+    const findInput = $('[data-find-input]', tools);
+    const saved = store.get('chess:filters', {});
+    $$('[data-filter]', tools).forEach((c) => { c.checked = (saved[c.dataset.filter] || []).includes(c.value); });
+    const applyFilters = () => {
+      const groups = {};
+      $$('[data-filter]', tools).forEach((c) => { if (c.checked) (groups[c.dataset.filter] = groups[c.dataset.filter] || []).push(c.value); });
+      store.set('chess:filters', groups);
+      const term = findInput.value.trim().toLowerCase();
+      let shown = 0, total = 0, firstHit = null;
+      $$('.chess__bar[data-booking]', chess).forEach((bar) => {
+        total++;
+        const ok = Object.entries(groups).every(([g, vals]) => vals.includes(bar.dataset[g]));
+        const hit = term && bar.dataset.find.includes(term);
+        const visible = ok && (!term || hit);
+        bar.classList.toggle('is-dim', !visible);
+        bar.classList.toggle('is-hit', Boolean(hit && ok));
+        if (visible) shown++;
+        if (hit && ok && !firstHit) firstHit = bar;
+      });
+      const active = Object.keys(groups).length || term;
+      $('[data-filter-count]', tools).textContent = active ? `Показано ${shown} из ${total}` : '';
+      if (firstHit && term) {
+        const row = firstHit.closest('.chess__row');
+        if (row && row.hidden) { collapsed.delete(row.dataset.type); store.set('chess:collapsed', [...collapsed]); applyCollapse(); }
+        firstHit.scrollIntoView({ block: 'center', inline: 'center' });
+      }
+    };
+    tools.addEventListener('change', applyFilters);
+    let findTimer;
+    findInput.addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(applyFilters, 200); });
+    $('[data-filter-reset]', tools).addEventListener('click', () => { $$('[data-filter]', tools).forEach((c) => { c.checked = false; }); findInput.value = ''; applyFilters(); });
+    applyFilters();
+
+    // Side panel with the booking and quick actions.
+    const peek = $('[data-peek]');
+    const peekBody = $('[data-peek-body]');
+    const openPeek = async (id) => {
+      const r = await fetch(`/app/bookings/${id}/peek?back=${encodeURIComponent(location.pathname + location.search)}`);
+      if (!r.ok) { location.href = `/app/bookings/${id}`; return; }
+      peekBody.innerHTML = await r.text();
+      peek.showModal();
+    };
+    peek.addEventListener('click', (e) => {
+      if (e.target === peek || e.target.closest('[data-peek-close]')) peek.close();
+    });
+    peek.addEventListener('change', (e) => {
+      const t = e.target.closest('[data-pay-toggle]');
+      if (!t) return;
+      const amount = t.closest('form').querySelector('[data-pay-amount]');
+      amount.value = t.checked ? amount.dataset.payAmount : '0';
+    });
+
+    // Drag a bar to another room and/or other days. The server answers with before/after
+    // (dry run); the change is applied only after the user confirms.
+    let dragged = null, grabDate = null, resizing = null, swallowClick = false;
+    const moveDialog = $('[data-move-dialog]');
+    let pending = null;
+    const describe = (s) => `${ru(s.checkin)} — ${ru(s.checkout)}, ${s.rooms.map((x) => (x.number ? `№ ${x.number}` : 'без номера') + ` (${x.type_name})`).join(' → ')}, ${s.total.toLocaleString('ru-RU')} ₽`;
+    const preview = async () => {
+      const r = await post(`/app/bookings/${pending.id}/relocate?dry=1`, { ...pending.body, keep_price: $('[data-keep-price]', moveDialog).checked });
+      const err = $('[data-move-error]', moveDialog);
+      if (!r.ok) { err.textContent = r.error; err.hidden = false; $('[data-move-apply]', moveDialog).disabled = true; $('[data-move-diff]', moveDialog).innerHTML = ''; return; }
+      err.hidden = true;
+      $('[data-move-apply]', moveDialog).disabled = false;
+      const diff = $('[data-move-diff]', moveDialog);
+      diff.innerHTML = '';
+      for (const [k, v] of [['Было', r.before], ['Станет', r.after]]) {
+        const p = document.createElement('p');
+        const b = document.createElement('strong');
+        b.textContent = `${k}: `;
+        p.append(b, describe(v));
+        diff.append(p);
+      }
+    };
+    $('[data-keep-price]', moveDialog).addEventListener('change', preview);
+    $('[data-move-cancel]', moveDialog).addEventListener('click', () => { moveDialog.close(); pending = null; });
+    $('[data-move-apply]', moveDialog).addEventListener('click', async () => {
+      const r = await post(`/app/bookings/${pending.id}/relocate`, { ...pending.body, keep_price: $('[data-keep-price]', moveDialog).checked });
+      moveDialog.close();
+      go(r.ok ? 'Бронь перенесена' : r.error, !r.ok);
+    });
+
     chess.addEventListener('dragstart', (e) => {
       const bar = e.target.closest('[data-booking]');
       if (!bar || resizing) { e.preventDefault(); return; }
       dragged = bar;
+      const cell = cellAt(e.clientX, e.clientY);
+      grabDate = cell ? cell.dataset.date : null;
       bar.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', bar.dataset.booking);
@@ -178,35 +313,29 @@
       const row = e.target.closest('[data-room]');
       if (!row || !dragged) return;
       e.preventDefault();
-      const id = dragged.dataset.booking;
-      const room = row.dataset.room === '0' ? '' : row.dataset.room;
-      if (dragged.parentElement === row) return;
-      send(`/app/bookings/${id}/move`, { room_id: room, segment_id: dragged.dataset.segment }, 'Не удалось переселить');
+      const bar = dragged;
+      const cell = cellAt(e.clientX, e.clientY);
+      // Dates move only for a whole stay that has not started yet.
+      const shift = cell && grabDate && bar.dataset.status === 'confirmed' && bar.dataset.whole === '1' ? diff(grabDate, cell.dataset.date) : 0;
+      const sameRow = bar.parentElement === row;
+      if (sameRow && !shift) return;
+      const body = { segment_id: bar.dataset.segment };
+      if (!sameRow) body.room_id = row.dataset.room === '0' ? '' : row.dataset.room;
+      if (shift) { body.checkin = addDays(bar.dataset.checkin, shift); body.checkout = addDays(bar.dataset.checkout, shift); }
+      pending = { id: bar.dataset.booking, body };
+      $('[data-keep-price]', moveDialog).checked = true;
+      await preview();
+      moveDialog.showModal();
     });
 
-    const send = async (url, body, fallback) => {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json', 'x-csrf-token': csrfToken },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json().catch(() => ({ error: fallback }));
-      const u = new URL(location.href);
-      u.searchParams.set('m', j.message || j.error);
-      if (!r.ok) u.searchParams.set('e', '1'); else u.searchParams.delete('e');
-      location.href = u.toString();
-    };
-
-    // Drag a bar's edge to change check-in or check-out. The bar follows the pointer;
-    // releasing it over a day sends the new date (the day of arrival / departure).
-    const from = chess.dataset.from;
-    const addDays = (d, n) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
-    const idxOf = (d) => Math.round((Date.parse(d + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000);
+    // Drag a bar's edge to change check-in or check-out.
     chess.addEventListener('pointerdown', (e) => {
+      swallowClick = false;
       const h = e.target.closest('.chess__handle');
       if (!h) return;
       e.preventDefault();
       e.stopPropagation();
+      swallowClick = true;
       const bar = h.closest('.chess__bar');
       resizing = { bar, edge: h.dataset.edge, orig: bar.style.gridColumn, checkin: bar.dataset.checkin, checkout: bar.dataset.checkout, date: null };
       bar.classList.add('resizing');
@@ -214,7 +343,7 @@
     });
     chess.addEventListener('pointermove', (e) => {
       if (!resizing) return;
-      const under = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.classList && el.classList.contains('chess__cell'));
+      const under = cellAt(e.clientX, e.clientY);
       if (!under) return;
       const date = under.dataset.date;
       const r = resizing;
@@ -223,11 +352,9 @@
       if (co <= ci) return;
       r.date = date;
       const [a, b] = r.orig.split('/').map((x) => x.trim());
-      const start = r.edge === 'checkin' ? 3 + idxOf(ci) * 2 : a;
-      const end = r.edge === 'checkout' ? 3 + idxOf(co) * 2 : b;
-      r.bar.style.gridColumn = `${start} / ${end}`;
+      r.bar.style.gridColumn = `${r.edge === 'checkin' ? 3 + idxOf(ci) * 2 : a} / ${r.edge === 'checkout' ? 3 + idxOf(co) * 2 : b}`;
     });
-    const finish = (cancel) => {
+    const finish = async (cancel) => {
       const r = resizing;
       if (!r) return;
       resizing = null;
@@ -235,15 +362,21 @@
       const changed = r.date && r.date !== (r.edge === 'checkin' ? r.checkin : r.checkout);
       if (cancel || !changed) { r.bar.style.gridColumn = r.orig; return; }
       const body = { checkin: r.edge === 'checkin' ? r.date : r.checkin, checkout: r.edge === 'checkout' ? r.date : r.checkout };
-      send(`/app/bookings/${r.bar.dataset.booking}/dates`, body, 'Не удалось изменить даты');
+      const res = await post(`/app/bookings/${r.bar.dataset.booking}/dates`, body);
+      go(res.message || res.error, !res.ok);
     };
     chess.addEventListener('pointerup', () => finish(false));
     chess.addEventListener('pointercancel', () => finish(true));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') finish(true); });
-    // The click that ends an edge drag must not open the booking card.
-    let swallowClick = false;
-    chess.addEventListener('pointerdown', (e) => { swallowClick = Boolean(e.target.closest('.chess__handle')); }, true);
-    chess.addEventListener('click', (e) => { if (swallowClick) { e.preventDefault(); swallowClick = false; } }, true);
+
+    // A plain click on a bar opens the side panel; the click that ends an edge drag does nothing.
+    chess.addEventListener('click', (e) => {
+      const bar = e.target.closest('.chess__bar[data-booking]');
+      if (!bar) return;
+      e.preventDefault();
+      if (swallowClick) { swallowClick = false; return; }
+      openPeek(bar.dataset.booking);
+    });
   }
 
   // Availability grid: edit a cell in a dialog, save via JSON

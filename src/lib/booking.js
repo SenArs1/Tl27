@@ -223,7 +223,7 @@ export function segmentsOf(db, bookingId) {
 export function createBooking(db, hotel, input) {
   const {
     query, roomId, rateId, extraIds = [], guest, payment = 'hotel', idemKey, source = 'site',
-    staff = false, physicalRoomId = null, priceOverride = null, createdBy = null, channelRef = null,
+    staff = false, physicalRoomId = null, priceOverride = null, createdBy = null, channelRef = null, autoRoom = false,
   } = input;
   return tx(db, () => {
     if (idemKey) {
@@ -255,7 +255,8 @@ export function createBooking(db, hotel, input) {
       physical = db.prepare('select * from rooms where id = ? and hotel_id = ? and room_type_id = ? and active = 1').get(physicalRoomId, hotel.id, room.id);
       if (!physical) throw new BookingError('room', 'Этот номер не относится к выбранной категории');
       if (!roomIsFree(db, physical.id, query.checkin, query.checkout)) throw new BookingError('room_busy', `Номер ${physical.number} на эти даты занят`);
-    } else {
+    } else if (hotel.placement_mode !== 'manual' || autoRoom) {
+      // "manual" mode leaves new bookings in the "Без номера" row for the front desk to place.
       physical = findFreeRoom(db, room.id, query.checkin, query.checkout);
     }
     const promo = findPromo(db, hotel.id, query.promo);
@@ -379,7 +380,7 @@ function targetRoom(db, b, roomId, start, end) {
 
 // Moves one part of a stay to another physical room (or takes the room away).
 // Moving to another category moves the sold nights too. The price stays as booked.
-export function moveSegment(db, booking, segmentId, targetRoomId) {
+export function moveSegment(db, booking, segmentId, targetRoomId, { reprice = null } = {}) {
   return tx(db, () => {
     const b = liveBooking(db, booking);
     const seg = db.prepare('select * from stay_segments where id = ? and booking_id = ?').get(segmentId, b.id);
@@ -388,12 +389,42 @@ export function moveSegment(db, booking, segmentId, targetRoomId) {
       db.prepare('update stay_segments set room_id = null where id = ?').run(seg.id);
     } else {
       const target = targetRoom(db, b, targetRoomId, seg.start, seg.end);
-      if (target.room_type_id !== seg.room_type_id) shiftInventory(db, [seg], [{ ...seg, room_type_id: target.room_type_id }]);
+      if (target.room_type_id !== seg.room_type_id) {
+        shiftInventory(db, [seg], [{ ...seg, room_type_id: target.room_type_id }]);
+        // reprice = hotel: the moved nights are charged at the new category's price.
+        if (reprice) repriceNights(db, reprice, b, seg.start, seg.end, target.room_type_id);
+      }
       db.prepare('update stay_segments set room_id = ?, room_type_id = ? where id = ?').run(target.id, target.room_type_id, seg.id);
     }
     mergeSegments(db, b.id);
     return db.prepare('select * from bookings where id = ?').get(b.id);
   });
+}
+
+// Replaces the price of nights [start, end) with the rate's price in another category.
+function repriceNights(db, hotel, b, start, end, typeId) {
+  const fresh = db.prepare('select * from bookings where id = ?').get(b.id);
+  const n = diffDays(fresh.checkin, fresh.checkout);
+  const moved = nightsOf(start, end);
+  const rates = ratesMap(db, fresh.hotel_id);
+  const rate = rates.get(fresh.rate_plan_id);
+  const room = db.prepare('select * from room_types where id = ?').get(typeId);
+  ensureInventory(db, room, moved);
+  const nightly = moved.map((d) => db.prepare('select price from inventory where room_type_id = ? and date = ?').get(typeId, d).price);
+  const ages = JSON.parse(fresh.children_ages || '[]');
+  const groups = childGroups(db, fresh.hotel_id);
+  const newPart = priceStay({ nightly, rate, rates, room, adults: fresh.adults, children: fresh.children, ages, groups }).stay;
+  const stay = Math.round(fresh.nights_total - (fresh.nights_total / n) * moved.length) + newPart;
+  updateMoney(db, hotel, fresh, stay, rate, ages, groups);
+}
+
+// Writes a new accommodation price and recalculates tax and total.
+function updateMoney(db, hotel, b, stay, rate, ages, groups) {
+  const n = diffDays(b.checkin, b.checkout);
+  const meals = priceStay({ nightly: Array(n).fill(0), rate: { ...rate, adjust_value: 0, discount_pct: 0, single_discount: 0 }, room: { capacity: 99, extra_beds: 99 }, adults: b.adults, children: b.children, ages, groups }).meals;
+  const tax = taxFor(hotel, Math.max(0, stay - meals), n);
+  const total = stay + tax + b.extras_total;
+  db.prepare('update bookings set nights_total = ?, tax_total = ?, total = ?, paid = ? where id = ?').run(stay, tax, total, b.paid_amount >= total ? 1 : 0, b.id);
 }
 
 // Whole-booking move, kept for single-segment stays (the common case).
@@ -425,7 +456,7 @@ export function splitStay(db, booking, date, targetRoomId) {
 // Changes the dates of a stay. Kept nights keep their booked price; added nights are
 // priced by the booking's rate at today's prices; removed nights come off the bill.
 // A guest who is already in house can only change the check-out date.
-export function changeDates(db, hotel, booking, checkin, checkout) {
+export function changeDates(db, hotel, booking, checkin, checkout, { keepPrice = false } = {}) {
   return tx(db, () => {
     const b = liveBooking(db, booking);
     if (!isIsoDate(checkin) || !isIsoDate(checkout) || checkout <= checkin) throw new BookingError('dates', 'Выезд должен быть позже заезда');
@@ -459,7 +490,8 @@ export function changeDates(db, hotel, booking, checkin, checkout) {
       const inv = db.prepare('select price from inventory where room_type_id = ? and date = ?').get(type, d);
       addedStay += priceStay({ nightly: [inv.price], rate, rates, room, adults: b.adults, children: b.children, ages, groups }).stay;
     }
-    const stay = Math.round((b.nights_total / oldN) * kept.length) + addedStay;
+    // keepPrice: the guest keeps paying the booked price per night, whatever today's prices are.
+    const stay = keepPrice ? Math.round((b.nights_total / oldN) * diffDays(checkin, checkout)) : Math.round((b.nights_total / oldN) * kept.length) + addedStay;
     const n = diffDays(checkin, checkout);
     const meals = priceStay({ nightly: Array(n).fill(0), rate: { ...rate, adjust_value: 0, discount_pct: 0, single_discount: 0 }, room: { capacity: 99, extra_beds: 99 }, adults: b.adults, children: b.children, ages, groups }).meals;
     const tax = taxFor(hotel, Math.max(0, stay - meals), n);
@@ -477,6 +509,70 @@ export function changeDates(db, hotel, booking, checkin, checkout) {
     mergeSegments(db, b.id);
     logToChannels(db, b.hotel_id, 'update', `Изменены даты ${b.code}: ${checkin} – ${checkout}, наличие обновлено`);
     return db.prepare('select * from bookings where id = ?').get(b.id);
+  });
+}
+
+class DryRun extends Error {
+  constructor(result) {
+    super('dry run');
+    this.result = result;
+  }
+}
+
+function summary(db, bookingId) {
+  const b = db.prepare('select * from bookings where id = ?').get(bookingId);
+  const rooms = db.prepare(`select s.start, s.end, r.number, t.name as type_name from stay_segments s
+    left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start`).all(bookingId);
+  return { checkin: b.checkin, checkout: b.checkout, total: b.total, nights_total: b.nights_total, rooms };
+}
+
+// One drag on the chessboard: a part of the stay goes to another room and/or the whole
+// stay shifts in time. Not-yet-arrived guests can move freely; a guest in house can only
+// change room, which splits the stay from today. dryRun returns before/after without saving.
+export function relocate(db, hotel, booking, { segmentId, roomId, checkin, checkout, keepPrice = true, today, dryRun = false }) {
+  try {
+    return tx(db, () => {
+      const b = liveBooking(db, booking);
+      const before = summary(db, b.id);
+      const datesChange = (checkin && checkin !== b.checkin) || (checkout && checkout !== b.checkout);
+      const segs = segmentsOf(db, b.id);
+      const seg = segs.find((x) => x.id === Number(segmentId)) || segs[0];
+      if (b.status === 'checked_in') {
+        if (datesChange && checkin !== b.checkin) throw new BookingError('state', 'Гость уже заселён — даты переносить нельзя, можно только переселить или продлить');
+        if (datesChange) changeDates(db, hotel, b, b.checkin, checkout, { keepPrice });
+        if (roomId && roomId !== seg.room_id) {
+          if (today > seg.start && today < seg.end) splitStay(db, b, today, roomId);
+          else moveSegment(db, b, seg.id, roomId, { reprice: keepPrice ? null : hotel });
+        }
+      } else {
+        if (datesChange) {
+          if (segs.length > 1) throw new BookingError('segment', 'Проживание разбито на части — меняйте даты в карточке брони');
+          changeDates(db, hotel, b, checkin || b.checkin, checkout || b.checkout, { keepPrice });
+        }
+        const now = segmentsOf(db, b.id).find((x) => x.start <= (seg.start > (checkin || seg.start) ? seg.start : (checkin || seg.start)) && x.end > (checkin || seg.start)) || segmentsOf(db, b.id)[0];
+        if (roomId !== undefined && roomId !== now.room_id) moveSegment(db, b, now.id, roomId || null, { reprice: keepPrice ? null : hotel });
+      }
+      const result = { before, after: summary(db, b.id) };
+      if (dryRun) throw new DryRun(result);
+      return result;
+    });
+  } catch (e) {
+    if (e instanceof DryRun) return e.result;
+    throw e;
+  }
+}
+
+// Places bookings from the "Без номера" row of one hotel into free rooms, earliest first.
+export function assignUnassigned(db, hotelId) {
+  return tx(db, () => {
+    const segs = db.prepare(`select s.* from stay_segments s join bookings b on b.id = s.booking_id
+      where s.hotel_id = ? and s.room_id is null and b.status in ('confirmed','checked_in') order by s.start, s.id`).all(hotelId);
+    let placed = 0;
+    for (const seg of segs) {
+      const r = findFreeRoom(db, seg.room_type_id, seg.start, seg.end, seg.booking_id);
+      if (r) { db.prepare('update stay_segments set room_id = ? where id = ?').run(r.id, seg.id); placed++; }
+    }
+    return { placed, left: segs.length - placed };
   });
 }
 
