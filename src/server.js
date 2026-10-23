@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { PRODUCTS, SOLUTIONS, ARTICLES } from './content.js';
 import { quote, TOOLS } from './lib/pricing.js';
 import { loadUser, requirePlatform, createSession, sessionCookie } from './lib/auth.js';
-import { parseSearch, searchOffers, createBooking, cancelBooking, validateGuest, priceStay, findPromo, ensureInventory, ratesMap, childGroups, BookingError } from './lib/booking.js';
+import { parseSearch, searchOffers, createBooking, cancelBooking, validateGuest, priceStay, findPromo, ensureInventory, ratesMap, childGroups, taxFor, BookingError } from './lib/booking.js';
+import { parseHourly, hourlyOffers, createHourly, priceOf } from './lib/hourly.js';
 import { addDays, nightsOf, todayIn } from './lib/dates.js';
 import { createHotel, PROPERTY_TYPES } from './lib/hotels.js';
 import { appRouter } from './routes/app.js';
@@ -115,14 +116,17 @@ export function createApp(db, opts = {}) {
     next();
   });
   const defaultQuery = (h) => ({ checkin: addDays(todayIn(h.timezone), Math.max(7, h.min_days_ahead)), checkout: addDays(todayIn(h.timezone), Math.max(7, h.min_days_ahead) + 2), adults: 2, children: 0, promo: '' });
-  const sellableRooms = (h) => db.prepare('select * from room_types where hotel_id = ? and active = 1 and total_rooms > 0 order by sort, id').all(h.id);
+  const sellableRooms = (h) => db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 0 and total_rooms > 0 order by sort, id').all(h.id);
+  const hourlyTypes = (h) => db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 1 and total_rooms > 0 order by sort, id').all(h.id);
+  const hourlyDefault = (h) => ({ date: addDays(todayIn(h.timezone), 1), start: '12:00', hours: Math.max(2, ...hourlyTypes(h).map((t) => t.min_hours)), adults: 1 });
+  const hotelHome = (h, query, errors = {}) => E.hotelPage(h, sellableRooms(h), query, errors, { types: hourlyTypes(h), q: hourlyDefault(h) });
 
   app.get('/h/:hotel', (req, res) => {
-    res.send(E.hotelPage(req.hotel, sellableRooms(req.hotel), defaultQuery(req.hotel), {}));
+    res.send(hotelHome(req.hotel, defaultQuery(req.hotel)));
   });
   app.get('/h/:hotel/rooms', (req, res) => {
     const s = parseSearch(req.query, req.hotel);
-    if (!s.ok) return res.status(422).send(E.hotelPage(req.hotel, sellableRooms(req.hotel), s.query, s.errors));
+    if (!s.ok) return res.status(422).send(hotelHome(req.hotel, s.query, s.errors));
     res.send(E.resultsPage(req.hotel, s.query, searchOffers(db, req.hotel, s.query)));
   });
   app.get('/api/h/:hotel/offers', (req, res) => {
@@ -179,6 +183,49 @@ export function createApp(db, opts = {}) {
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
       res.status(409).send(E.checkoutPage(req.hotel, { ...ctx, chosen, values, errors: {}, idemKey: crypto.randomUUID(), formError: e.message }));
+    }
+  });
+
+  // ---------- hourly stays ----------
+  const hourlyQuery = (h, src) => {
+    const p = parseHourly(src, h);
+    p.query.adults = Math.min(12, Math.max(1, int(src.adults) || 1));
+    return p;
+  };
+  app.get('/h/:hotel/hourly', (req, res) => {
+    const types = hourlyTypes(req.hotel);
+    if (!types.length) return res.redirect(303, `/h/${req.hotel.slug}`);
+    const p = hourlyQuery(req.hotel, req.query);
+    if (!p.ok) {
+      return res.status(422).send(E.hourlyResultsPage(req.hotel, types, p.query, [], p.errors));
+    }
+    res.send(E.hourlyResultsPage(req.hotel, types, p.query, hourlyOffers(db, req.hotel, p.query, p.query.adults)));
+  });
+  const hourlyCtx = (h, src) => {
+    const p = hourlyQuery(h, src);
+    const type = hourlyTypes(h).find((t) => t.id === int(src.type));
+    if (!p.ok || !type) return null;
+    const price = priceOf(type, p.query.hours);
+    return { q: p.query, type, price, tax: taxFor(h, price, 1) };
+  };
+  app.get('/h/:hotel/hourly/checkout', (req, res) => {
+    const ctx = hourlyCtx(req.hotel, req.query);
+    if (!ctx) return res.redirect(303, `/h/${req.hotel.slug}#hourly`);
+    res.send(E.hourlyCheckoutPage(req.hotel, { ...ctx, idemKey: crypto.randomUUID() }));
+  });
+  app.post('/h/:hotel/hourly/book', (req, res) => {
+    const ctx = hourlyCtx(req.hotel, req.body);
+    if (!ctx) return res.redirect(303, `/h/${req.hotel.slug}#hourly`);
+    const v = validateGuest(req.body);
+    const idemKey = /^[0-9a-f-]{36}$/.test(req.body.idem || '') ? req.body.idem : crypto.randomUUID();
+    const values = { ...req.body, agree: req.body.agree === 'on' };
+    if (!v.ok) return res.status(422).send(E.hourlyCheckoutPage(req.hotel, { ...ctx, values, errors: v.errors, idemKey }));
+    try {
+      const b = createHourly(db, req.hotel, { typeId: ctx.type.id, q: ctx.q, guest: v.guest, adults: ctx.q.adults, source: 'site', idemKey });
+      res.redirect(303, `/h/${req.hotel.slug}/booking/${b.code}?t=${bookingToken(b.code)}&new=1`);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      res.status(409).send(E.hourlyCheckoutPage(req.hotel, { ...ctx, values, errors: {}, idemKey: crypto.randomUUID(), formError: e.message }));
     }
   });
 

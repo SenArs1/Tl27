@@ -24,7 +24,7 @@ export function roomsPage({ req, hotel, types, rooms, rates, groups, ageGroups =
       <h2 class="h3">Категории номеров</h2>
       <p class="muted">Основные места — кровати, на которые рассчитана базовая цена. Дополнительные — раскладушка, диван, детская кроватка; их цена задаётся в тарифе.</p>
       ${types.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label="Категории номеров"><table class="table"><thead><tr><th scope="col">Название</th><th scope="col">Основных мест</th><th scope="col">Доп. мест</th><th scope="col">Номеров</th><th scope="col">Цена по умолчанию</th><th scope="col">Статус</th><th scope="col"><span class="sr-only">Действия</span></th></tr></thead>
-        <tbody>${types.map((t) => html`<tr><td>${t.name}</td><td>${t.capacity}</td><td>${t.extra_beds}</td><td>${t.total_rooms}</td><td>${rub(t.base_price)}</td><td>${t.active ? 'продаётся' : 'скрыта'}</td>
+        <tbody>${types.map((t) => html`<tr><td>${t.name}</td><td>${t.capacity}</td><td>${t.extra_beds}</td><td>${t.total_rooms}</td><td>${t.hourly ? html`${rub(t.hour_price)} / час<small class="muted">от ${t.min_hours} ч, ${t.open_from}–${t.open_to}</small>` : rub(t.base_price)}</td><td>${t.active ? 'продаётся' : 'скрыта'}</td>
           <td><details class="row-edit"><summary>Изменить</summary>${typeForm(req, t, `/app/rooms/types/${t.id}`)}</details></td></tr>`)}</tbody></table></div>`
         : html`<div class="empty"><p>Категорий пока нет — добавьте первую.</p></div>`}
       ${addBlock('Добавить категорию', typeForm(req, {}, '/app/rooms/types'), !types.length)}
@@ -114,6 +114,15 @@ function typeForm(req, t, action) {
     ${field({ prefix: pfx, name: 'capacity', label: 'Основных мест', type: 'number', value: t.capacity ?? 2, attrs: 'min="1" max="12" required' })}
     ${field({ prefix: pfx, name: 'extra_beds', label: 'Дополнительных мест', type: 'number', value: t.extra_beds ?? 0, attrs: 'min="0" max="6" required' })}
     ${field({ prefix: pfx, name: 'base_price', label: 'Цена за ночь, ₽', type: 'number', value: t.base_price ?? 3000, attrs: 'min="0" required' })}
+    ${field({ prefix: pfx, name: 'hourly', label: 'Как продаётся', type: 'select', value: t.hourly ? '1' : '0', options: [['0', 'по ночам'], ['1', 'по часам (дневное пребывание, сауна, переговорная)']] })}
+    <fieldset class="span-all hourly-fields"><legend>Для продажи по часам</legend>
+      ${field({ prefix: pfx, name: 'hour_price', label: 'Цена за час, ₽', type: 'number', value: t.hour_price ?? 0, attrs: 'min="0"' })}
+      ${field({ prefix: pfx, name: 'min_hours', label: 'Минимум часов', type: 'number', value: t.min_hours ?? 2, attrs: 'min="1" max="24"' })}
+      ${field({ prefix: pfx, name: 'max_hours', label: 'Максимум часов', type: 'number', value: t.max_hours ?? 12, attrs: 'min="1" max="24"' })}
+      ${field({ prefix: pfx, name: 'buffer_min', label: 'Уборка между гостями, мин', type: 'number', value: t.buffer_min ?? 30, attrs: 'min="0" max="240" step="15"' })}
+      ${field({ prefix: pfx, name: 'open_from', label: 'Принимаем с', type: 'time', value: t.open_from ?? '08:00', attrs: 'step="1800"' })}
+      ${field({ prefix: pfx, name: 'open_to', label: 'Принимаем до', type: 'time', value: t.open_to === '24:00' ? '00:00' : t.open_to ?? '23:00', attrs: 'step="1800"', hint: '00:00 — до полуночи; 00:00–00:00 — круглосуточно' })}
+    </fieldset>
     ${field({ prefix: pfx, name: 'area_m2', label: 'Площадь, м²', type: 'number', value: t.area_m2 ?? 18, attrs: 'min="0"' })}
     ${field({ prefix: pfx, name: 'beds', label: 'Кровати', value: t.beds })}
     ${field({ prefix: pfx, name: 'sort', label: 'Порядок показа', type: 'number', value: t.sort ?? 0 })}

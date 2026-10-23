@@ -1,4 +1,5 @@
 import { html, raw, rub, field } from './html.js';
+import { whenOf } from '../lib/hourly.js';
 import { appLayout, bare } from './layout.js';
 import { statusBadge } from './engine.js';
 import { fmtDate, fmtShort, weekday, isWeekend, nightsLabel, diffDays, addDays as addDaysV } from '../lib/dates.js';
@@ -117,7 +118,7 @@ export function bookingsTable(rows, empty, channels = []) {
     <tbody>${rows.map((b) => html`<tr>
       <td><a href="/app/bookings/${b.id}">${b.code}</a>${b.group_code ? html`<small class="muted">группа <a href="/app/groups/${b.group_id}">${b.group_code}</a></small>` : ''}</td><td>${b.created_at.slice(0, 16)}</td><td>${sourceName(b.source, channels)}</td>
       <td>${b.guest_name}${b.tags && b.tags.length ? html` ${b.tags.map((t) => html`<span class="tag tag--${t.color}">${t.name}</span>`)}` : ''}<small class="muted">${b.guest_phone}</small></td><td>${b.room_number ? `№ ${b.room_number}` : html`<span class="badge badge--warn">без номера</span>`}<small class="muted">${b.room_name}</small></td>
-      <td>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}</td><td>${rub(b.total)}</td>
+      <td>${b.start_at ? html`${whenOf(b, { short: true })}<small class="muted">по часам</small>` : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`}</td><td>${rub(b.total)}</td>
       <td>${b.paid_amount >= b.total ? html`<span class="badge badge--confirmed">оплачено</span>` : b.paid_amount ? rub(b.paid_amount) : html`<span class="muted">нет</span>`}</td>
       <td>${statusBadge(b.status)}</td></tr>`)}</tbody>
   </table></div>`;

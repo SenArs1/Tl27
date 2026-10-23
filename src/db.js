@@ -337,7 +337,17 @@ const COLUMNS = {
   users: { is_platform_admin: 'integer not null default 0', kind: "text not null default ''" },
   user_hotels: { kind: "text not null default ''" },
   sessions: { hotel_id: 'integer' },
-  room_types: { extra_beds: 'integer not null default 0' },
+  // hourly = 1: rooms of the category are sold by the hour (day use, sauna, meeting room), not by the night.
+  room_types: {
+    extra_beds: 'integer not null default 0',
+    hourly: 'integer not null default 0',
+    hour_price: 'integer not null default 0',
+    min_hours: 'integer not null default 1',
+    max_hours: 'integer not null default 12',
+    buffer_min: 'integer not null default 30',
+    open_from: "text not null default '08:00'",
+    open_to: "text not null default '23:00'",
+  },
   rate_plans: {
     extra_adult_price: 'integer not null default 0',
     extra_child_price: 'integer not null default 0',
@@ -368,6 +378,8 @@ const COLUMNS = {
     channel_ref: 'text',
     children_ages: "text not null default '[]'",
     group_id: 'integer references booking_groups(id) on delete set null',
+    start_at: 'text',
+    end_at: 'text',
     checked_in_at: 'text',
     checked_out_at: 'text',
     customer_name: "text not null default ''",

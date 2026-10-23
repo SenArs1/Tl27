@@ -34,6 +34,11 @@ export function seed(db, now = new Date()) {
     addPhysicalRooms(db, hotelId, id, t[9], t[8]);
     return id;
   });
+  // A day-use room sold by the hour: 900 ₽/h, 2–8 hours, 09:00–22:00, 30 minutes to clean between guests.
+  const dayUse = Number(db.prepare(`insert into room_types (hotel_id, name, description, capacity, extra_beds, beds, area_m2, total_rooms, base_price, image, sort,
+    hourly, hour_price, min_hours, max_hours, buffer_min, open_from, open_to) values (?,?,?,?,?,?,?,0,?,?,?,1,900,2,8,30,'09:00','22:00')`)
+    .run(hotelId, 'Дневной номер', 'Отдохнуть между поездами или поработать в тишине: душ, кровать, рабочий стол.', 2, 0, 'Двуспальная кровать', 16, 0, 'room-1', types.length).lastInsertRowid);
+  addPhysicalRooms(db, hotelId, dayUse, ['Д1', 'Д2'], 1);
 
   db.prepare("update rate_plans set name = 'Гибкий', description = 'Бесплатная отмена до дня заезда. Оплата при заселении.', extra_adult_price = 1500, extra_child_price = 800 where hotel_id = ?").run(hotelId);
   const flexId = db.prepare('select id from rate_plans where hotel_id = ?').get(hotelId).id;

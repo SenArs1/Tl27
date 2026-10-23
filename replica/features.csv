@@ -70,7 +70,7 @@ Platform admin: all tenants and leads,platform,should,yes,yes,/admin
 Chessboard side panel with quick actions,extranet,should,yes,yes,"check-in/out with time and payment, undo check-out"
 Drag to room and dates with before/after preview and keep-price option,extranet,should,yes,yes,
 Placement mode for new bookings (auto / unassigned row) and auto-assign,extranet,could,yes,yes,
-Hourly bookings,extranet,could,yes,no,separate mode
+Hourly bookings,extranet,could,yes,yes,"categories sold by the hour: price/hour, min/max hours, cleaning gap, open hours; day board; guest booking on the site"
 Booking tags and notes with due dates,extranet,should,yes,yes,"tags with colours, chessboard mark and filter; notes/tasks with deadlines on dashboard"
 "Booking card tabs (details, stay & services, payments, guests, documents, notes, history)",extranet,must,yes,yes,
 "Refund, void payment, transfer payment to another booking",extranet,should,yes,yes,

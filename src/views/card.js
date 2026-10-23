@@ -4,6 +4,7 @@ import { statusBadge } from './engine.js';
 import { csrf, sourceName, PAY_METHODS } from './app.js';
 import { fmtDate, nightsLabel, diffDays, addDays } from '../lib/dates.js';
 import { PURPOSES, TAG_COLORS } from '../lib/card.js';
+import { whenOf, hoursOf } from '../lib/hourly.js';
 
 export const TABS = [
   ['details', 'Детали'],
@@ -47,7 +48,7 @@ export function bookingCard(p) {
     <section class="card card-head">
       <div class="card-head__main">
         <h2 class="h3">${b.guest_name} ${statusBadge(b.status)} ${tagChips(tags.filter((t) => p.tagIds.includes(t.id)))}</h2>
-        <p class="muted">${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))} ·
+        <p class="muted">${b.start_at ? `по часам: ${whenOf(b)}` : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(diffDays(b.checkin, b.checkout))}`} ·
           ${segments.map((sg, i) => html`${i ? ' → ' : ''}${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">без номера</span>`}`)} · ${rate ? rate.name : ''} · ${sourceName(b.source, channels)}${p.group ? html` · группа <a href="/app/groups/${p.group.id}">${p.group.name}</a>` : ''}</p>
       </div>
       <div class="card-head__money"><span>Итого ${rub(b.total)}</span>${debt > 0 ? html`<strong class="debt">к оплате ${rub(debt)}</strong>` : html`<strong class="paid">оплачено</strong>`}</div>
@@ -84,7 +85,8 @@ function detailsTab(p, here) {
         <fieldset class="chips"><legend class="sr-only">Теги брони</legend>${tags.map((t) => html`<label class="chip chip--${t.color}"><input type="checkbox" name="tags" value="${t.id}" ${tagIds.includes(t.id) ? raw('checked') : ''}><span>${t.name}</span></label>`)}</fieldset>
         <div class="actions"><button class="btn btn--secondary" type="submit">Сохранить теги</button><a href="/app/settings/tags">Настроить теги</a></div></form>`
         : html`<p class="muted">Тегов пока нет. <a href="/app/settings/tags">Создайте их в настройках</a> — например «VIP», «Ранний заезд» — и отмечайте брони; на шахматке по ним работает фильтр.</p>`}
-      ${live ? html`<h2 class="h3 move-form">Номера и даты</h2>
+      ${live && b.start_at ? hourlyBlock(p, here) : ''}
+      ${live && !b.start_at ? html`<h2 class="h3 move-form">Номера и даты</h2>
         <ul class="segments">${segments.map((sg) => html`<li>
           <span><strong>${fmtDate(sg.start)} — ${fmtDate(sg.end)}</strong> · ${sg.type_name} · ${sg.number ? `№ ${sg.number}` : html`<span class="badge badge--warn">без номера</span>`}</span>
           <form class="form form--inline" method="post" action="/app/bookings/${b.id}/move">${csrf(req)}<input type="hidden" name="segment_id" value="${sg.id}"><input type="hidden" name="back" value="${here}">
@@ -110,7 +112,7 @@ function stayTab(p, here) {
   return html`<div class="app-cols">
     <section class="card"><h2 class="h3">Проживание</h2>
       <ul class="quote">
-        <li><span>Проживание, ${nightsLabel(diffDays(b.checkin, b.checkout))}${b.extra_beds_total ? ` (в т.ч. доп. места ${rub(b.extra_beds_total)})` : ''}</span><span>${rub(b.nights_total)}</span></li>
+        <li><span>Проживание, ${b.start_at ? `${hoursOf(b)} ч` : nightsLabel(diffDays(b.checkin, b.checkout))}${b.extra_beds_total ? ` (в т.ч. доп. места ${rub(b.extra_beds_total)})` : ''}</span><span>${rub(b.nights_total)}</span></li>
         ${b.tax_total ? html`<li><span>Туристический налог</span><span>${rub(b.tax_total)}</span></li>` : ''}
         ${b.discount_total ? html`<li><span>Учтённые скидки${b.promo_code ? ` (в т.ч. ${b.promo_code})` : ''}</span><span>${rub(b.discount_total)}</span></li>` : ''}
       </ul>
@@ -268,4 +270,21 @@ function depositBlock(p, here) {
         ${field({ prefix: 'dh', name: 'reason', label: 'Причина', attrs: 'required minlength="3" placeholder="например, разбит стакан"' })}
         <div class="actions span-all"><button class="btn btn--primary" type="submit">Удержать</button></div></form></details>` : ''}
   </div>`;
+}
+
+// Hourly booking: new date, start, length or room.
+function hourlyBlock(p, here) {
+  const { req, b, segments, hourRooms = [] } = p;
+  const times = [];
+  for (let m = 0; m < 24 * 60; m += 30) times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  return html`<h2 class="h3 move-form">Время и номер</h2>
+    <p>${whenOf(b)} · ${segments[0] && segments[0].number ? `№ ${segments[0].number}` : ''} · <a href="/app/hourly?date=${b.start_at.slice(0, 10)}">на почасовой доске</a></p>
+    <form class="form form--grid" method="post" action="/app/bookings/${b.id}/time">${csrf(req)}<input type="hidden" name="back" value="${here}">
+      ${field({ prefix: 'tm', name: 'date', label: 'Дата', type: 'date', value: b.start_at.slice(0, 10), attrs: b.status === 'checked_in' ? 'readonly' : 'required' })}
+      ${field({ prefix: 'tm', name: 'start', label: 'Начало', type: 'select', value: b.start_at.slice(11), options: (b.status === 'checked_in' ? [b.start_at.slice(11)] : times).map((t) => [t, t]) })}
+      ${field({ prefix: 'tm', name: 'hours', label: 'Часов', type: 'number', value: hoursOf(b), attrs: 'min="1" max="24" required' })}
+      ${field({ prefix: 'tm', name: 'room', label: 'Номер', type: 'select', value: segments[0] ? segments[0].room_id : '', options: hourRooms.map((r) => [r.id, `№ ${r.number}`]) })}
+      <label class="check span-all"><input type="checkbox" name="keep_price"><span>Сохранить текущую цену (иначе — цена за час × часы)</span></label>
+      <div class="actions span-all"><button class="btn btn--secondary" type="submit">Изменить время</button></div>
+    </form>`;
 }

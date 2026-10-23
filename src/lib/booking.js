@@ -174,7 +174,7 @@ export function searchOffers(db, hotel, query) {
   const nights = nightsOf(query.checkin, query.checkout);
   const guests = query.adults + query.children;
   const promo = findPromo(db, hotel.id, query.promo);
-  const rooms = db.prepare('select * from room_types where hotel_id = ? and active = 1 and total_rooms > 0 order by sort, id').all(hotel.id);
+  const rooms = db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 0 and total_rooms > 0 order by sort, id').all(hotel.id);
   const all = ratesMap(db, hotel.id);
   const groups = childGroups(db, hotel.id);
   const rates = [...all.values()].filter((r) => r.active).sort((a, b) => a.id - b.id);
@@ -349,6 +349,7 @@ function shiftInventory(db, before, after, { staff = true } = {}) {
 }
 
 function returnInventory(db, b) {
+  if (b.start_at) return; // hourly categories have no nightly inventory
   shiftInventory(db, segmentsOf(db, b.id), []);
 }
 
@@ -371,6 +372,7 @@ function mergeSegments(db, bookingId) {
 function liveBooking(db, booking) {
   const b = db.prepare('select * from bookings where id = ?').get(booking.id);
   if (['cancelled', 'no_show', 'checked_out'].includes(b.status)) throw new BookingError('state', 'Закрытую или отменённую бронь менять нельзя');
+  if (b.start_at) throw new BookingError('hourly', 'Это почасовая бронь — меняйте её через «Изменить время»');
   return b;
 }
 
@@ -427,6 +429,13 @@ function repriceNights(db, hotel, b, start, end, typeId) {
 // Writes a new accommodation price and recalculates tax and total.
 export function updateMoney(db, hotel, b, stay, rate, ages, groups) {
   const n = diffDays(b.checkin, b.checkout);
+  if (b.start_at) {
+    // Hourly stay: no meals by the night; tax counts one day.
+    const tax = taxFor(hotel, stay, 1);
+    const total = stay + tax + b.extras_total;
+    db.prepare('update bookings set nights_total = ?, tax_total = ?, total = ?, paid = ? where id = ?').run(stay, tax, total, b.paid_amount >= total ? 1 : 0, b.id);
+    return;
+  }
   const meals = priceStay({ nightly: Array(n).fill(0), rate: { ...rate, adjust_value: 0, discount_pct: 0, single_discount: 0 }, room: { capacity: 99, extra_beds: 99 }, adults: b.adults, children: b.children, ages, groups }).meals;
   const tax = taxFor(hotel, Math.max(0, stay - meals), n);
   const total = stay + tax + b.extras_total;

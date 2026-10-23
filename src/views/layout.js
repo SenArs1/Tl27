@@ -97,6 +97,7 @@ const STAFF = ['owner', 'manager'];
 const APP_NAV = [
   ['/app', 'home', 'Сводка', [...STAFF, 'investor']],
   ['/app/chess', 'grid', 'Шахматка', STAFF],
+  ['/app/hourly', 'clock', 'По часам', STAFF, 'hourly'],
   ['/app/bookings', 'list', 'Журнал броней', STAFF],
   ['/app/groups', 'users', 'Группы', STAFF],
   ['/app/housekeeping', 'check', 'Уборка', [...STAFF, 'housekeeping']],
@@ -126,7 +127,7 @@ export function appLayout({ title, req, hotel, body, msg, wide = false }) {
         </form>`
       : html`<p class="app-hotel">${hotel.name}</p>`}
     <nav aria-label="Разделы кабинета">
-      ${APP_NAV.filter((x) => x[3].includes(req.user.role)).map(([href, ic, label]) => {
+      ${APP_NAV.filter((x) => x[3].includes(req.user.role) && (x[4] !== 'hourly' || req.hasHourly)).map(([href, ic, label]) => {
         const active = href === '/app' ? path === '/app' || path === '/app/' : path.startsWith(href);
         return html`<a href="${href}" ${active ? raw('aria-current="page"') : ''}>${icon(ic, 20)}<span>${label}</span></a>`;
       })}

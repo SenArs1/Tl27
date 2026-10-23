@@ -9,6 +9,7 @@ const TODAY = {
   arrival: ['Заезд сегодня', 'подготовить номер'],
   stay: ['Гости проживают', 'текущая уборка по запросу'],
   free: ['Свободен', ''],
+  hourly: ['Почасовые гости сегодня', 'уборка после каждого гостя'],
 };
 
 // Housekeeping board: rooms and what happens in them today — no guest names, phones or money.
@@ -32,7 +33,7 @@ export function housekeepingPage({ req, hotel, floors, counts, filter, msg }) {
       <ul class="hk-list">${rooms.map((r) => html`<li class="hk hk--${r.status}">
         <div class="hk__room"><strong>${r.number}</strong><small>${r.type_name}</small></div>
         <div class="hk__state"><span class="badge badge--${r.status === 'clean' ? 'confirmed' : r.status === 'dirty' ? 'warn' : 'cancelled'}">${STATUS[r.status]}</span>
-          <span>${TODAY[r.today][0]}</span>${TODAY[r.today][1] ? html`<small class="muted">${TODAY[r.today][1]}</small>` : ''}${r.note ? html`<small class="muted">${r.note}</small>` : ''}</div>
+          <span>${TODAY[r.today][0]}</span>${TODAY[r.today][1] ? html`<small class="muted">${TODAY[r.today][1]}</small>` : ''}${r.slots ? html`<small class="muted">${r.slots}</small>` : ''}${r.note ? html`<small class="muted">${r.note}</small>` : ''}</div>
         <div class="actions">
           ${r.status !== 'clean' && r.status !== 'repair' ? html`<form method="post" action="/app/housekeeping/${r.id}">${csrf(req)}<input type="hidden" name="status" value="clean"><input type="hidden" name="show" value="${filter}"><button class="btn btn--primary btn--sm" type="submit">Убрано</button></form>` : ''}
           ${r.status === 'clean' ? html`<form method="post" action="/app/housekeeping/${r.id}">${csrf(req)}<input type="hidden" name="status" value="dirty"><input type="hidden" name="show" value="${filter}"><button class="btn btn--ghost btn--sm" type="submit">Нужна уборка</button></form>` : ''}

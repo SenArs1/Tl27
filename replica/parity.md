@@ -1,13 +1,13 @@
-## Parity: 98.8 / 100
+## Parity: 99.4 / 100
 
-features 98.8  (74 counted, must-haves 33 of 33 done)
+features 99.4  (74 counted, must-haves 33 of 33 done)
 
 ## By area, weakest first
 - reports                       95.0  (5 features)
 - booking engine                98.2  (11 features)
-- extranet                      98.8  (37 features)
 - marketing                    100.0  (8 features)
 - support                      100.0  (1 features)
+- extranet                     100.0  (37 features)
 - channel manager              100.0  (2 features)
 - rates                        100.0  (3 features)
 - extras                       100.0  (1 features)
@@ -15,7 +15,6 @@ features 98.8  (74 counted, must-haves 33 of 33 done)
 - platform                     100.0  (3 features)
 
 ## Missing, in build order
-- [could] extranet: Hourly bookings, no  (separate mode)
 - [could] booking engine: Loyalty program, partial  (only described on the product page; no member accounts)
 - [could] reports: MVD guest list and e-registration, partial  (guest documents, registration card, MVD list with deadlines/status, CSV; sending to MVD is manual (no government API connection))
 

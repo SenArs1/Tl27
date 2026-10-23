@@ -1,4 +1,5 @@
 import { html, raw, field } from './html.js';
+import { whenOf } from '../lib/hourly.js';
 import { csrf } from './app.js';
 import { DOC_TYPES, COUNTRIES, MVD_STATUS, countryName, docName, maskDoc, isForeign, mvdDeadline } from '../lib/guests.js';
 import { fmtDate } from '../lib/dates.js';
@@ -77,7 +78,7 @@ export function registrationCard({ hotel, b, g, rooms }) {
     ${isForeign(g) ? row('Миграционная карта / виза', [g.migration_card, g.visa].filter(Boolean).join(', ')) : ''}
     ${row('Бронирование', b.code)}
     ${row('Номер', rooms)}
-    ${row('Заезд — выезд', `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`)}
+    ${row('Заезд — выезд', b.start_at ? whenOf(b) : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`)}
   </table>
   <p class="consent">Я подтверждаю, что данные указаны верно, и даю согласие ${hotel.legal_name || hotel.name} на обработку моих персональных данных для оказания гостиничных услуг и регистрационного учёта в соответствии с законодательством РФ.</p>
   <p class="sign">Подпись гостя ____________________ &nbsp;&nbsp; Дата ____________ &nbsp;&nbsp; Администратор ____________________</p>

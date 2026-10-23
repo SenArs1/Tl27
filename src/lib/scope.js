@@ -7,9 +7,15 @@ export function scope(db, hotelId) {
     hotelId,
     hotel: () => db.prepare('select * from hotels where id = ?').get(hotelId),
     types: all('select * from room_types where hotel_id = ? order by sort, id'),
-    activeTypes: all('select * from room_types where hotel_id = ? and active = 1 order by sort, id'),
+    // Nightly categories: chessboard, price grid, channels, nightly bookings.
+    activeTypes: all('select * from room_types where hotel_id = ? and active = 1 and hourly = 0 order by sort, id'),
+    hourlyTypes: all('select * from room_types where hotel_id = ? and active = 1 and hourly = 1 order by sort, id'),
     type: one('select * from room_types where id = ? and hotel_id = ?'),
     rooms: all(`select r.*, t.name as type_name, t.sort as type_sort from rooms r join room_types t on t.id = r.room_type_id
+      where r.hotel_id = ? and r.active = 1 and t.hourly = 0 order by t.sort, t.id, r.sort, r.number`),
+    hourlyRooms: all(`select r.*, t.name as type_name from rooms r join room_types t on t.id = r.room_type_id
+      where r.hotel_id = ? and r.active = 1 and t.active = 1 and t.hourly = 1 order by t.sort, t.id, r.sort, r.number`),
+    allRooms: all(`select r.*, t.name as type_name, t.sort as type_sort, t.hourly from rooms r join room_types t on t.id = r.room_type_id
       where r.hotel_id = ? and r.active = 1 order by t.sort, t.id, r.sort, r.number`),
     room: one('select * from rooms where id = ? and hotel_id = ? and active = 1'),
     rates: all('select * from rate_plans where hotel_id = ? order by id'),

@@ -125,3 +125,26 @@ Tests: 54 unit/HTTP (+6: history, refund/voiding, transfer, price/discount/servi
 - **Group bookings** (`/app/groups`). One form creates N bookings in one transaction: if a single room fails, nothing is created. One payment from the organiser is spread over the rooms' debts, earliest arrival first. Rooms can be added to or removed from a group, all not-yet-arrived rooms can be cancelled at once, and the whole group has one printable invoice. The group code shows on chessboard bars, in chessboard search, in the journal and in the booking card.
 
 Tests: 58 unit/HTTP (+4: deposit, split invoices, groups, roles over HTTP with groups and invoices), 47 e2e + 3 deliberate skips (+2 specs on desktop and mobile with axe).
+
+## Version 8 (hourly bookings, 2026-10-23)
+
+The competitor's public knowledge base turned up no instructions for this mode, so the design follows common day-use practice and was written from scratch.
+
+- **Hourly category.** A category's sale mode can be set to "by the hour", with a price per hour, minimum and maximum hours, a cleaning gap between guests (30 min by default) and the hours bookings are accepted (09:00–22:00; 00:00–00:00 means round the clock). The mode can't be switched while the category has future bookings.
+- **Kept apart from nightly sale.** Hourly categories have no nightly inventory: they don't appear on the chessboard, in the price grid, in the nightly search, in channels or in the occupancy report. Cancelling an hourly booking doesn't touch the nightly inventory. Hourly bookings don't show up as departures in the dashboard and chessboard counts.
+- **"По часам" board** (`/app/hourly`). Hourly rooms run down the side and the day runs across in half-hour columns. Each booking is a bar with the guest name and time, followed by a hatched block for the cleaning gap; times outside the accepted hours are shaded. Clicking an empty cell opens the form already filled with that room and time. The menu item appears only when the hotel has hourly categories.
+- **Booking rules.** Start times go in 30-minute steps and a booking may cross midnight. The room is chosen automatically, or set by hand, and an overlap is refused with the clashing booking and the cleaning gap named. Staff may book outside the accepted hours; guests may not. The price is the hourly price × hours, or a manual price. Tourist tax is counted as for one day.
+- **Booking card.** A "Время и номер" block lets staff change the date, start, length and room, with an option to keep the price. Once the guest has checked in, only the length can change. Moving, splitting and date changes from the nightly flow are refused with a hint to use "Изменить время".
+- **Everywhere else.** The journal, documents, the registration card and the guest booking page show "date, 14:00–17:00, 3 ч" instead of nights. The housekeeping board lists each hourly room's time slots for the day, with no guest data.
+- **Hotel site.** A "По часам" section with a search form (date, start, hours, guests) leads to results with the price for the period, then to the guest form (payment on site). Booking is idempotent, the same as for nightly stays.
+- **Demo.** The demo hotel has a "Дневной номер" category with rooms Д1 and Д2.
+
+Bugs found while testing v8 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B19 | S2 | on a phone the booking card was 40px wider than the screen. The screen-reader-only legend of the tags block got `width: 100%`, so taps landed on the wrong element | the `.chips legend` rule no longer applies to `.sr-only` |
+| B20 | S4 | the hotel page search form was 1px wider than a 390px screen | `minmax(0, 1fr)` columns, inputs with `min-width: 0` |
+| B21 | — | during design: the `bookings` table requires checkout > checkin, so an hourly stay can't end the same day | check-out date = next day; the real end is kept in `end_at`, and departure lists skip hourly bookings |
+
+Tests: 63 unit/HTTP (+5: rules, cleaning gap and cancel, time change, isolation from nightly sale, HTTP for staff and guests), 51 e2e + 3 deliberate skips (+2 specs on desktop and mobile with axe). A pass at 390px over all 34 cabinet and site pages finds no horizontal scroll.

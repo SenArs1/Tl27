@@ -1,4 +1,5 @@
 import { html, rub } from './html.js';
+import { whenOf } from '../lib/hourly.js';
 import { fmtDate, nightsLabel, diffDays } from '../lib/dates.js';
 import { BRAND } from '../content.js';
 
@@ -22,9 +23,9 @@ export function confirmationDoc({ hotel, b, rooms, rate }) {
   return page(`Подтверждение ${b.code}`, hotel, html`<h1>Подтверждение бронирования № ${b.code}</h1>
     <table>
       ${row('Гость', b.guest_name)}
-      ${row('Заезд', `${fmtDate(b.checkin)}, с ${hotel.checkin_time}`)}
+      ${b.start_at ? row('Время', `по часам: ${whenOf(b)}`) : html`${row('Заезд', `${fmtDate(b.checkin)}, с ${hotel.checkin_time}`)}
       ${row('Выезд', `${fmtDate(b.checkout)}, до ${hotel.checkout_time}`)}
-      ${row('Срок', nightsLabel(diffDays(b.checkin, b.checkout)))}
+      ${row('Срок', nightsLabel(diffDays(b.checkin, b.checkout)))}`}
       ${row('Номер', rooms)}
       ${row('Гости', `${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}`)}
       ${row('Тариф', rate ? `${rate.name}${rate.description ? `. ${rate.description}` : ''}` : '')}
@@ -37,7 +38,7 @@ export function confirmationDoc({ hotel, b, rooms, rate }) {
 
 // One invoice of the booking: the whole bill, or the lines a given payer covers.
 export function invoiceDoc({ hotel, b, inv }) {
-  const period = `${nightsLabel(diffDays(b.checkin, b.checkout))} (${fmtDate(b.checkin)} — ${fmtDate(b.checkout)})`;
+  const period = b.start_at ? `по часам: ${whenOf(b)}` : `${nightsLabel(diffDays(b.checkin, b.checkout))} (${fmtDate(b.checkin)} — ${fmtDate(b.checkout)})`;
   const debt = inv.total - inv.paid;
   return page(`Счёт ${inv.number}`, hotel, html`<h1>Счёт на оплату № ${inv.number}</h1>
     <table>${row('Плательщик', `${inv.payer_name}${inv.payer_inn ? `, ИНН ${inv.payer_inn}` : ''}`)}${row('Гость', b.guest_name)}${row('Бронь', `${b.code}, ${period}`)}</table>
@@ -54,7 +55,7 @@ export function invoiceDoc({ hotel, b, inv }) {
 export function receiptDoc({ hotel, b, payments }) {
   const valid = payments.filter((p) => !p.voided);
   return page(`Оплаты ${b.code}`, hotel, html`<h1>Справка об оплате по брони № ${b.code}</h1>
-    <table>${row('Гость', b.guest_name)}${row('Проживание', `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`)}</table>
+    <table>${row('Гость', b.guest_name)}${row('Проживание', b.start_at ? whenOf(b) : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`)}</table>
     <h2 class="doc-h2">Платежи</h2>
     <table><thead><tr><th scope="col">Дата</th><th scope="col">Операция</th><th scope="col">Способ</th><th scope="col">Сумма</th></tr></thead>
       <tbody>${valid.map((p) => html`<tr><td>${p.created_at.slice(0, 16)}</td><td>${KIND[p.kind] || p.kind}${p.note ? ` (${p.note})` : ''}</td><td>${METHOD[p.method] || p.method}</td><td>${p.amount < 0 ? '−' : ''}${rub(Math.abs(p.amount))}</td></tr>`)}

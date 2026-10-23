@@ -1,4 +1,5 @@
 import { html, raw, rub, field } from './html.js';
+import { whenOf } from '../lib/hourly.js';
 import { icon } from './icons.js';
 import { engineLayout } from './layout.js';
 import { addDays, fmtDate, nightsLabel, today, plural } from '../lib/dates.js';
@@ -28,7 +29,7 @@ export function searchForm(hotel, query, errors = {}) {
   </form>`;
 }
 
-export function hotelPage(hotel, rooms, query, errors) {
+export function hotelPage(hotel, rooms, query, errors, hourly = { types: [], q: {} }) {
   return engineLayout({
     title: 'Бронирование',
     hotel,
@@ -39,9 +40,10 @@ export function hotelPage(hotel, rooms, query, errors) {
     </section>
     ${searchForm(hotel, query, errors)}
     <section class="section-sm"><h2>Номера</h2>
-      ${rooms.length ? '' : html`<div class="card empty"><p>Отель ещё не открыл онлайн-продажи. Позвоните нам: ${hotel.phone || 'телефон уточняется'}</p></div>`}
+      ${rooms.length || hourly.types.length ? '' : html`<div class="card empty"><p>Отель ещё не открыл онлайн-продажи. Позвоните нам: ${hotel.phone || 'телефон уточняется'}</p></div>`}
       <div class="cards cards--2">${rooms.map((r) => html`<article class="card room-mini"><div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div><div><h3>${r.name}</h3><p class="muted">${r.area_m2} м² · ${capacityText(r)}</p><p>от ${rub(r.base_price)} за ночь</p></div></article>`)}</div>
-    </section>`,
+    </section>
+    ${hourlySection(hotel, hourly.types, hourly.q)}`,
   });
 }
 
@@ -151,8 +153,8 @@ export function confirmationPage(hotel, b, room, rate, { justBooked = false, err
         <dt>Гость</dt><dd>${b.guest_name}</dd>
         <dt>Номер</dt><dd>${room.name}</dd>
         <dt>Тариф</dt><dd>${rate.name}</dd>
-        <dt>Заезд</dt><dd>${fmtDate(b.checkin)}, с ${hotel.checkin_time}</dd>
-        <dt>Выезд</dt><dd>${fmtDate(b.checkout)}, до ${hotel.checkout_time}</dd>
+        ${b.start_at ? html`<dt>Время</dt><dd>${whenOf(b)}</dd>` : html`<dt>Заезд</dt><dd>${fmtDate(b.checkin)}, с ${hotel.checkin_time}</dd>
+        <dt>Выезд</dt><dd>${fmtDate(b.checkout)}, до ${hotel.checkout_time}</dd>`}
         <dt>Гости</dt><dd>${b.adults} взр.${b.children ? `, ${b.children} дет.` : ''}</dd>
         ${extras.length ? html`<dt>Допуслуги</dt><dd>${extras.map((e) => `${e.name} × ${e.qty}`).join(', ')}</dd>` : ''}
         <dt>Сумма</dt><dd><strong>${rub(b.total)}</strong>${b.discount_total ? html` <span class="muted">(скидка ${rub(b.discount_total)})</span>` : ''}</dd>
@@ -195,4 +197,89 @@ function groupExtras(extras) {
     m.get(k).push(e);
   }
   return [...m.entries()];
+}
+
+// ---------- hourly stays ----------
+const hqs = (q, extra = {}) => new URLSearchParams({ date: q.date, start: q.start, hours: q.hours, adults: q.adults || 1, ...extra }).toString();
+
+function hourTimes(types) {
+  const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const from = Math.min(...types.map((t) => toMin(t.open_from)));
+  const to = Math.max(...types.map((t) => toMin(t.open_to)));
+  const out = [];
+  for (let m = from; m < to; m += 30) out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  return out;
+}
+
+export function hourlySearchForm(hotel, types, q, errors = {}) {
+  const t = today();
+  return html`<form class="search-bar card" method="get" action="/h/${hotel.slug}/hourly" novalidate>
+    ${field({ prefix: 'hr', name: 'date', label: 'Дата', type: 'date', value: q.date, error: errors.date, attrs: `min="${t}" required` })}
+    ${field({ prefix: 'hr', name: 'start', label: 'Начало', type: 'select', value: q.start, error: errors.start, options: hourTimes(types).map((x) => [x, x]) })}
+    ${field({ prefix: 'hr', name: 'hours', label: 'Часов', type: 'number', value: q.hours, error: errors.hours, attrs: 'min="1" max="24" inputmode="numeric" required' })}
+    ${field({ prefix: 'hr', name: 'adults', label: 'Гостей', type: 'number', value: q.adults || 1, attrs: 'min="1" max="12" inputmode="numeric"' })}
+    <button class="btn btn--accent btn--lg" type="submit">Найти по часам</button>
+  </form>`;
+}
+
+export function hourlySection(hotel, types, q) {
+  if (!types.length) return '';
+  return html`<section class="section-sm" id="hourly"><h2>По часам</h2>
+    <p class="muted">${types.map((t) => `${t.name} — ${rub(t.hour_price)} в час, от ${t.min_hours} ч`).join(' · ')}</p>
+    ${hourlySearchForm(hotel, types, q)}</section>`;
+}
+
+export function hourlyResultsPage(hotel, types, q, offers, errors = null) {
+  if (errors) {
+    return engineLayout({ title: 'Почасовое бронирование', hotel, body: html`<h1 class="h2">Почасовое бронирование</h1>${hourlySearchForm(hotel, types, q, errors)}` });
+  }
+  return engineLayout({
+    title: 'Почасовое бронирование',
+    hotel,
+    body: html`${hourlySearchForm(hotel, types, q)}
+    <ol class="progress" aria-label="Шаги бронирования"><li aria-current="step">Номер</li><li>Данные гостя</li><li>Готово</li></ol>
+    <h1 class="h2">${fmtDate(q.date)}, ${q.start}–${q.endAt.slice(11)}, ${q.hours} ч</h1>
+    ${offers.some((o) => o.available) ? '' : html`<div class="empty card"><h2 class="h3">На это время свободных номеров нет</h2><p>Попробуйте другое время или позвоните нам: ${hotel.phone}</p></div>`}
+    <div class="offers">${offers.map((o) => html`<article class="card offer ${o.available ? '' : 'offer--off'}" aria-label="${o.type.name}">
+      <div class="room-img room-img--${o.type.image}" role="img" aria-label="Иллюстрация номера"></div>
+      <div class="offer__body"><h2 class="h3">${o.type.name}</h2>
+        <p class="muted">${o.type.description}</p>
+        <p class="muted">${capacityText(o.type)} · ${rub(o.type.hour_price)} в час · от ${o.type.min_hours} до ${o.type.max_hours} ч · уборка ${o.type.buffer_min} мин между гостями</p>
+        ${o.available ? html`<p class="offer__price"><strong>${rub(o.price)}</strong> за ${q.hours} ч</p>
+          <a class="btn btn--accent" href="/h/${hotel.slug}/hourly/checkout?${hqs(q, { type: o.type.id })}">Выбрать</a>`
+          : html`<p class="muted">${o.reason}</p>`}
+      </div></article>`)}</div>`,
+  });
+}
+
+export function hourlyCheckoutPage(hotel, { q, type, price, tax, values = {}, errors = {}, idemKey, formError }) {
+  return engineLayout({
+    title: 'Данные гостя',
+    hotel,
+    body: html`<ol class="progress" aria-label="Шаги бронирования"><li><a href="/h/${hotel.slug}/hourly?${hqs(q)}">Номер</a></li><li aria-current="step">Данные гостя</li><li>Готово</li></ol>
+    <h1 class="h2">Почти готово</h1>
+    ${formError ? html`<div class="flash flash--error" role="alert">${formError} <a href="/h/${hotel.slug}/hourly?${hqs(q)}">Выбрать другое время</a></div>` : ''}
+    <div class="checkout">
+      <form class="card form" method="post" action="/h/${hotel.slug}/hourly/book" novalidate>
+        <input type="hidden" name="date" value="${q.date}"><input type="hidden" name="start" value="${q.start}"><input type="hidden" name="hours" value="${q.hours}">
+        <input type="hidden" name="adults" value="${q.adults}"><input type="hidden" name="type" value="${type.id}"><input type="hidden" name="idem" value="${idemKey}">
+        <h2 class="h3">Кто приедет</h2>
+        ${field({ name: 'guest_name', label: 'Имя и фамилия', value: values.guest_name, error: errors.guest_name, attrs: 'autocomplete="name" required' })}
+        ${field({ name: 'guest_email', label: 'Почта', type: 'email', value: values.guest_email, error: errors.guest_email, attrs: 'autocomplete="email" required', hint: 'Пришлём подтверждение и ссылку на бронь' })}
+        ${field({ name: 'guest_phone', label: 'Телефон', type: 'tel', value: values.guest_phone, error: errors.guest_phone, attrs: 'autocomplete="tel" required' })}
+        ${field({ name: 'comment', label: 'Пожелания (необязательно)', type: 'textarea', value: values.comment })}
+        <p class="muted">Оплата — на месте.${hotel.cancel_policy ? ` ${hotel.cancel_policy}` : ''}</p>
+        <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''} required><span>Согласен с условиями и обработкой персональных данных</span></label>
+        ${errors.agree ? html`<p class="field-error">${errors.agree}</p>` : ''}
+        <button class="btn btn--accent btn--lg btn--block" type="submit">Забронировать</button>
+      </form>
+      <aside class="card summary" aria-label="Ваша бронь">
+        <div class="room-img room-img--${type.image}" role="img" aria-label="Иллюстрация номера"></div>
+        <h2 class="h3">${type.name}</h2>
+        <dl class="kv"><dt>Дата</dt><dd>${fmtDate(q.date)}</dd><dt>Время</dt><dd>${q.start}–${q.endAt.slice(11)}, ${q.hours} ч</dd><dt>Гости</dt><dd>${q.adults}</dd></dl>
+        <ul class="quote"><li><span>${q.hours} ч × ${rub(type.hour_price)}</span><span>${rub(price)}</span></li>${tax ? html`<li><span>Туристический налог</span><span>${rub(tax)}</span></li>` : ''}</ul>
+        <p class="quote__total"><span>Итого</span><strong>${rub(price + tax)}</strong></p>
+      </aside>
+    </div>`,
+  });
 }

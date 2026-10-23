@@ -16,7 +16,9 @@ import { guestsSection, registrationCard } from '../views/guests.js';
 import { bookingCard, TABS } from '../views/card.js';
 import { confirmationDoc, invoiceDoc, receiptDoc, groupInvoiceDoc } from '../views/docs.js';
 import { groupsPage, groupPage } from '../views/groups.js';
+import { hourlyPage } from '../views/hourly.js';
 import { validateGroup, createGroup, groupMembers, groupTotals, listGroups, payGroup, cancelGroup, attachBooking, detachBooking } from '../lib/groups.js';
+import { toMin, parseHourly, createHourly, changeTime, dayBoard } from '../lib/hourly.js';
 import { invoicesOf, findInvoice, createInvoice, deleteInvoice } from '../lib/invoices.js';
 import { depositBalance, takeDeposit, returnDeposit, retainDeposit, logEvent, historyOf, refund, voidPayment, transferPayment, setStayPrice, applyDiscount, addService, removeService, tagsOf, setTags, notesOf, tracked, TAG_COLORS } from '../lib/card.js';
 import { validateGuestDoc, mvdDeadline, splitName, isForeign } from '../lib/guests.js';
@@ -84,6 +86,7 @@ export function appRouter(db, { showDemo }) {
     req.hotelRow = req.s.hotel();
     req.hotels = userHotels(db, req.user.id);
     req.today = todayIn(req.hotelRow.timezone);
+    req.hasHourly = Boolean(db.prepare('select 1 from room_types where hotel_id = ? and hourly = 1 and active = 1').get(req.user.hotel_id));
     const m = req.query.m;
     req.msg = m ? { type: req.query.e ? 'error' : 'success', text: String(m).slice(0, 300) } : null;
     next();
@@ -113,9 +116,10 @@ export function appRouter(db, { showDemo }) {
     const t = req.today;
     const list = (where, ...p) => db.prepare(`${BOOKING_LIST} and ${where} order by room_number, b.id`).all(hid, ...p);
     const arrivals = list("b.checkin = ? and b.status in ('confirmed','checked_in')", t);
-    const departures = list("b.checkout = ? and b.status in ('confirmed','checked_in','checked_out')", t);
-    const rooms = db.prepare("select count(*) n from rooms where hotel_id = ? and active = 1 and status != 'repair'").get(hid).n;
-    const occupiedOn = db.prepare(`select count(*) n from bookings where hotel_id = ? and checkin <= ? and checkout > ? and status in ${ACTIVE}`);
+    const departures = list("b.checkout = ? and b.start_at is null and b.status in ('confirmed','checked_in','checked_out')", t);
+    // Occupancy counts nightly rooms only; hourly rooms have their own board.
+    const rooms = db.prepare("select count(*) n from rooms r join room_types t on t.id = r.room_type_id where r.hotel_id = ? and r.active = 1 and r.status != 'repair' and t.hourly = 0").get(hid).n;
+    const occupiedOn = db.prepare(`select count(*) n from bookings where hotel_id = ? and start_at is null and checkin <= ? and checkout > ? and status in ${ACTIVE}`);
     const occupied = occupiedOn.get(hid, t, t).n;
     const inhouse = db.prepare("select coalesce(sum(adults+children),0) n from bookings where hotel_id = ? and status = 'checked_in'").get(hid).n;
     const forecast = Array.from({ length: 14 }, (_, i) => {
@@ -148,6 +152,46 @@ export function appRouter(db, { showDemo }) {
   });
 
   // ---------- housekeeping ----------
+  // ---------- hourly bookings ----------
+  const hourlyView = (req, date, extra = {}) => hourlyPage({
+    req, hotel: req.hotelRow, msg: req.msg, date, today: req.today, board: dayBoard(db, req.user.hotel_id, date),
+    types: req.s.hourlyTypes(), rooms: req.s.hourlyRooms(), ...extra,
+  });
+  r.get('/hourly', (req, res) => {
+    const date = isIsoDate(req.query.date) ? req.query.date : req.today;
+    const types = req.s.hourlyTypes();
+    const room = req.query.room ? req.s.room(req.query.room) : null;
+    const type = types.find((t) => t.id === int(req.query.type)) || types[0];
+    res.send(hourlyView(req, date, {
+      open: req.query.new === '1',
+      values: { idem: crypto.randomUUID(), date, type: room ? room.room_type_id : type?.id, room: room ? room.id : '', start: /^\d{2}:\d{2}$/.test(req.query.start || '') ? req.query.start : '12:00', hours: type ? type.min_hours : 2, adults: 1 },
+    }));
+  });
+  r.post('/hourly', (req, res) => {
+    const b = req.body;
+    const date = isIsoDate(b.date) ? b.date : req.today;
+    const fail = (status, formError) => res.status(status).send(hourlyView(req, date, { open: true, values: b, formError }));
+    const p = parseHourly(b, req.hotelRow, { staff: true });
+    const v = validateGuest(b, { requireAgree: false, requireEmail: false });
+    const errs = Object.values({ ...p.errors, ...v.errors });
+    if (errs.length) return fail(422, errs.join('. '));
+    const type = req.s.hourlyTypes().find((t) => t.id === int(b.type));
+    if (!type) return fail(422, 'Выберите категорию, которая продаётся по часам');
+    const override = b.price_override === undefined || b.price_override === '' ? null : int(b.price_override, -1);
+    if (override !== null && override < 0) return fail(422, 'Цена не может быть отрицательной');
+    try {
+      const booking = createHourly(db, req.hotelRow, {
+        typeId: type.id, roomId: b.room ? int(b.room) : null, q: p.query, guest: v.guest, adults: Math.max(1, int(b.adults, 1)),
+        source: 'extranet', staff: true, priceOverride: override, createdBy: req.user.id, user: req.user,
+        idemKey: /^[0-9a-f-]{36}$/.test(b.idem || '') ? b.idem : null,
+      });
+      back(res, `/app/hourly?date=${p.query.date}`, `Бронь ${booking.code} создана: ${p.query.start}–${p.query.endAt.slice(11)}`);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      fail(409, e.message);
+    }
+  });
+
   // ---------- group bookings ----------
   const groupsView = (req, extra = {}) => groupsPage({
     req, hotel: req.hotelRow, msg: req.msg, groups: listGroups(db, req.user.hotel_id),
@@ -218,11 +262,19 @@ export function appRouter(db, { showDemo }) {
   r.get('/housekeeping', (req, res) => {
     const t = req.today;
     const filter = ['dirty', 'today'].includes(req.query.show) ? req.query.show : 'all';
-    const rooms = req.s.rooms();
+    const rooms = req.s.allRooms();
     // What happens in each room today, from the stay parts (no guest data is read).
     const segs = db.prepare(`select s.room_id, s.start, s.end from stay_segments s join bookings b on b.id = s.booking_id
-      where s.hotel_id = ? and s.room_id is not null and b.status in ('confirmed','checked_in','checked_out') and s.start <= ? and s.end >= ?`).all(req.user.hotel_id, t, t);
+      where s.hotel_id = ? and s.room_id is not null and b.status in ('confirmed','checked_in','checked_out') and b.start_at is null and s.start <= ? and s.end >= ?`).all(req.user.hotel_id, t, t);
+    const hourly = db.prepare(`select s.room_id, substr(b.start_at, 12, 5) as s, substr(b.end_at, 12, 5) as e from stay_segments s join bookings b on b.id = s.booking_id
+      where s.hotel_id = ? and b.start_at is not null and b.status in ('confirmed','checked_in','checked_out') and b.checkin = ? order by b.start_at`).all(req.user.hotel_id, t);
     for (const r of rooms) {
+      if (r.hourly) {
+        const slots = hourly.filter((x) => x.room_id === r.id);
+        r.today = slots.length ? 'hourly' : 'free';
+        r.slots = slots.map((x) => `${x.s}–${x.e}`).join(', ');
+        continue;
+      }
       const mine = segs.filter((x) => x.room_id === r.id);
       const out = mine.some((x) => x.end === t);
       const inn = mine.some((x) => x.start === t);
@@ -274,7 +326,7 @@ export function appRouter(db, { showDemo }) {
     const bookings = db.prepare(`select b.*, s.id as segment_id, s.room_id as seg_room, s.room_type_id as seg_type, s.start, s.end,
         s.start = b.checkin as is_first, s.end = b.checkout as is_last, g.code as group_code
       from stay_segments s join bookings b on b.id = s.booking_id left join booking_groups g on g.id = b.group_id
-      where s.hotel_id = ? and b.status not in ('cancelled','no_show') and s.start < ? and s.end > ? order by s.start`).all(h.id, to, from);
+      where s.hotel_id = ? and b.start_at is null and b.status not in ('cancelled','no_show') and s.start < ? and s.end > ? order by s.start`).all(h.id, to, from);
     const free = {};
     for (const t of types) {
       const dates = nightsOf(from, to);
@@ -286,14 +338,14 @@ export function appRouter(db, { showDemo }) {
     const nowTime = timeIn(h.timezone);
     const one = (sql, ...p) => db.prepare(sql).get(h.id, ...p).n;
     const roomsLive = rooms.filter((r) => r.status !== 'repair').length;
-    const occupied = one(`select count(*) n from stay_segments s join bookings b on b.id = s.booking_id where s.hotel_id = ? and s.start <= ? and s.end > ? and b.status in ('confirmed','checked_in')`, t, t);
-    const live = db.prepare(`select * from bookings where hotel_id = ? and status in ('confirmed','checked_in') and checkin <= ? and checkout >= ?`).all(h.id, addDays(t, 1), addDays(t, -30));
+    const occupied = one(`select count(*) n from stay_segments s join bookings b on b.id = s.booking_id where s.hotel_id = ? and b.start_at is null and s.start <= ? and s.end > ? and b.status in ('confirmed','checked_in')`, t, t);
+    const live = db.prepare(`select * from bookings where hotel_id = ? and start_at is null and status in ('confirmed','checked_in') and checkin <= ? and checkout >= ?`).all(h.id, addDays(t, 1), addDays(t, -30));
     const stats = {
       rooms: roomsLive, occupied, pct: roomsLive ? Math.round((occupied / roomsLive) * 100) : 0,
-      arrivals: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and status in ('confirmed','checked_in','checked_out')`, t),
-      arrivalsLeft: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and status = 'confirmed'`, t),
-      departures: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and status in ('checked_in','checked_out')`, t),
-      departuresLeft: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and status = 'checked_in'`, t),
+      arrivals: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and start_at is null and status in ('confirmed','checked_in','checked_out')`, t),
+      arrivalsLeft: one(`select count(*) n from bookings where hotel_id = ? and checkin = ? and start_at is null and status = 'confirmed'`, t),
+      departures: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and start_at is null and status in ('checked_in','checked_out')`, t),
+      departuresLeft: one(`select count(*) n from bookings where hotel_id = ? and checkout = ? and start_at is null and status = 'checked_in'`, t),
       inhouse: one(`select coalesce(sum(adults + children), 0) n from bookings where hotel_id = ? and status = 'checked_in'`),
       free: Math.max(0, roomsLive - occupied),
       overdue: live.filter((b) => isOverdue(b, t, nowTime, h)).length,
@@ -530,6 +582,7 @@ export function appRouter(db, { showDemo }) {
       payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id),
       extrasCatalog: db.prepare('select e.*, g.name as group_name from extras e left join extra_groups g on g.id = e.group_id where e.hotel_id = ? and e.active = 1 order by g.sort, e.name').all(req.user.hotel_id),
       notes: notesOf(db, b.id), history: historyOf(db, b.id), guestList, guestCount: guestList.length, deposit: depositBalance(db, b.id), invoices: invoicesOf(db, b),
+      hourRooms: b.start_at ? db.prepare('select * from rooms where room_type_id = ? and active = 1 order by sort, number').all(b.room_type_id) : [],
       group: b.group_id ? db.prepare('select * from booking_groups where id = ? and hotel_id = ?').get(b.group_id, b.hotel_id) : null,
       guests: tab === 'guests' ? guestsBlock(req, b, extra) : '',
     });
@@ -673,6 +726,12 @@ export function appRouter(db, { showDemo }) {
     transferPayment(db, b, target, int(req.body.amount), req.user);
     back(res, ret, `Оплата перенесена в бронь ${target.code}`);
   });
+  cardAction('time', (req, res, b, ret) => {
+    const p = parseHourly(req.body, req.hotelRow, { staff: true });
+    if (!p.ok) throw new BookingError('time', Object.values(p.errors).join('. '));
+    changeTime(db, req.hotelRow, b, { q: p.query, roomId: req.body.room ? int(req.body.room) : null, keepPrice: req.body.keep_price === 'on' }, req.user);
+    back(res, ret, `Время изменено: ${p.query.start}–${p.query.endAt.slice(11)}`);
+  });
   cardAction('invoices', (req, res, b, ret) => {
     createInvoice(db, b, { payerName: req.body.payer_name, payerInn: req.body.payer_inn, keys: arr(req.body.items).map(String) }, req.user);
     back(res, ret, 'Отдельный счёт выставлен');
@@ -799,7 +858,7 @@ export function appRouter(db, { showDemo }) {
   // ---------- rooms, stock, rates, extras, promos ----------
   r.get('/rooms', (req, res) => {
     res.send(roomsPage({
-      req, hotel: req.hotelRow, msg: req.msg, types: req.s.types(), rooms: req.s.rooms(), rates: [...ratesMap(db, req.user.hotel_id).values()].sort((x, y) => x.id - y.id),
+      req, hotel: req.hotelRow, msg: req.msg, types: req.s.types(), rooms: req.s.allRooms(), rates: [...ratesMap(db, req.user.hotel_id).values()].sort((x, y) => x.id - y.id),
       ageGroups: childGroups(db, req.user.hotel_id),
       groups: req.s.groups(), extras: req.s.extras(), promos: req.s.promos(),
     }));
@@ -814,6 +873,19 @@ export function appRouter(db, { showDemo }) {
     else if (t.capacity < 1 || t.capacity > 12) err = 'Основных мест: от 1 до 12';
     else if (t.extra_beds < 0 || t.extra_beds > 6) err = 'Дополнительных мест: от 0 до 6';
     else if (t.base_price < 0 || t.base_price > 1000000) err = 'Цена: от 0 до 1 000 000 ₽';
+    // Hourly sale: price per hour, length limits, cleaning gap, open hours ("00:00" as the end means midnight).
+    t.hourly = b.hourly === '1' ? 1 : 0;
+    t.hour_price = Math.max(0, int(b.hour_price));
+    t.min_hours = Math.min(24, Math.max(1, int(b.min_hours, 1)));
+    t.max_hours = Math.min(24, Math.max(t.min_hours, int(b.max_hours, 12)));
+    t.buffer_min = Math.min(240, Math.max(0, int(b.buffer_min, 30)));
+    const time = (v, d) => (/^\d{2}:(00|30)$/.test(v || '') ? v : d);
+    t.open_from = time(b.open_from, '08:00');
+    t.open_to = time(b.open_to, '23:00');
+    if (t.open_to === '00:00') t.open_to = '24:00';
+    if (!err && t.hourly && !t.hour_price) err = 'Для продажи по часам укажите цену за час';
+    else if (!err && t.hourly && t.open_to <= t.open_from) err = 'Время «до» должно быть позже «с»';
+    else if (!err && t.hourly && toMin(t.open_to) - toMin(t.open_from) < t.min_hours * 60) err = 'Минимум часов не помещается в часы работы';
     return { t, err };
   };
   r.post('/rooms/types', (req, res) => {
@@ -821,8 +893,10 @@ export function appRouter(db, { showDemo }) {
     if (err) return back(res, '/app/rooms#types', err, true);
     const images = ['room-1', 'room-2', 'room-3', 'room-4'];
     const n = req.s.types().length;
-    db.prepare('insert into room_types (hotel_id, name, description, capacity, extra_beds, beds, area_m2, total_rooms, base_price, image, sort) values (?,?,?,?,?,?,?,0,?,?,?)')
-      .run(req.user.hotel_id, t.name, t.description, t.capacity, t.extra_beds, t.beds, t.area_m2, t.base_price, images[n % 4], t.sort || n);
+    db.prepare(`insert into room_types (hotel_id, name, description, capacity, extra_beds, beds, area_m2, total_rooms, base_price, image, sort,
+      hourly, hour_price, min_hours, max_hours, buffer_min, open_from, open_to) values (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?)`)
+      .run(req.user.hotel_id, t.name, t.description, t.capacity, t.extra_beds, t.beds, t.area_m2, t.base_price, images[n % 4], t.sort || n,
+        t.hourly, t.hour_price, t.min_hours, t.max_hours, t.buffer_min, t.open_from, t.open_to);
     back(res, '/app/rooms#stock', `Категория «${t.name}» добавлена. Теперь добавьте в неё номера.`);
   });
   r.post('/rooms/types/:id', (req, res, next) => {
@@ -830,8 +904,13 @@ export function appRouter(db, { showDemo }) {
     if (!old) return next();
     const { t, err } = typeInput(req.body);
     if (err) return back(res, '/app/rooms#types', err, true);
-    db.prepare('update room_types set name=?, description=?, capacity=?, extra_beds=?, beds=?, area_m2=?, base_price=?, sort=?, active=? where id = ?')
-      .run(t.name, t.description, t.capacity, t.extra_beds, t.beds, t.area_m2, t.base_price, t.sort, t.active, old.id);
+    if (t.hourly !== old.hourly && db.prepare(`select 1 from bookings where room_type_id = ? and status in ('confirmed','checked_in') and checkout > ?`).get(old.id, req.today)) {
+      return back(res, '/app/rooms#types', 'В категории есть будущие брони — сначала завершите или перенесите их, потом меняйте способ продажи', true);
+    }
+    db.prepare(`update room_types set name=?, description=?, capacity=?, extra_beds=?, beds=?, area_m2=?, base_price=?, sort=?, active=?,
+      hourly=?, hour_price=?, min_hours=?, max_hours=?, buffer_min=?, open_from=?, open_to=? where id = ?`)
+      .run(t.name, t.description, t.capacity, t.extra_beds, t.beds, t.area_m2, t.base_price, t.sort, t.active,
+        t.hourly, t.hour_price, t.min_hours, t.max_hours, t.buffer_min, t.open_from, t.open_to, old.id);
     back(res, '/app/rooms#types', 'Сохранено');
   });
   r.post('/rooms/stock', (req, res) => {
@@ -1036,7 +1115,7 @@ export function appRouter(db, { showDemo }) {
       const q = (where) => db.prepare(`${BOOKING_LIST} and ${where} order by room_number`).all(hid, from);
       data = {
         arrivals: q("b.checkin = ? and b.status in ('confirmed','checked_in','checked_out')"),
-        departures: q("b.checkout = ? and b.status in ('confirmed','checked_in','checked_out')"),
+        departures: q("b.checkout = ? and b.start_at is null and b.status in ('confirmed','checked_in','checked_out')"),
         inhouse: db.prepare(`${BOOKING_LIST} and b.checkin <= ? and b.checkout > ? and b.status in ${ACTIVE} order by room_number`).all(hid, from, from),
       };
     } else if (tab === 'tax') {
@@ -1226,9 +1305,10 @@ export function appRouter(db, { showDemo }) {
 export function occupancyReport(db, hotelId, from, to) {
   const end = addDays(to, 1);
   const days = nightsOf(from, end);
-  const types = db.prepare('select * from room_types where hotel_id = ? and active = 1 order by sort, id').all(hotelId);
+  // Nightly categories only: an hourly room is not a room-night.
+  const types = db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 0 order by sort, id').all(hotelId);
   const roomsByType = new Map(types.map((t) => [t.id, db.prepare("select count(*) n from rooms where room_type_id = ? and active = 1 and status != 'repair'").get(t.id).n]));
-  const bookings = db.prepare(`select * from bookings where hotel_id = ? and status in ${ACTIVE} and checkin < ? and checkout > ?`).all(hotelId, end, from);
+  const bookings = db.prepare(`select * from bookings where hotel_id = ? and start_at is null and status in ${ACTIVE} and checkin < ? and checkout > ?`).all(hotelId, end, from);
   const segs = db.prepare('select * from stay_segments where booking_id = ? order by start');
   const perDay = new Map(days.map((d) => [d, { date: d, sold: 0, revenue: 0, arrivals: 0, departures: 0 }]));
   const perType = new Map(types.map((t) => [t.id, { name: t.name, sold: 0, revenue: 0 }]));
