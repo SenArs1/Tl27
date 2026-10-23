@@ -216,7 +216,8 @@
       let shown = 0, total = 0, firstHit = null;
       $$('.chess__bar[data-booking]', chess).forEach((bar) => {
         total++;
-        const ok = Object.entries(groups).every(([g, vals]) => vals.includes(bar.dataset[g]));
+        // A bar matches a group if one of its values is chosen; tags are a space-separated list.
+        const ok = Object.entries(groups).every(([g, vals]) => (bar.dataset[g] || '').split(' ').some((v) => vals.includes(v)));
         const hit = term && bar.dataset.find.includes(term);
         const visible = ok && (!term || hit);
         bar.classList.toggle('is-dim', !visible);

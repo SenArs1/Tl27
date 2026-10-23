@@ -63,7 +63,7 @@ function spark(points, max) {
   </div>`;
 }
 
-export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhouse, forecast, sources, unassigned, dirty, debtors, channels, mvdPending = 0, mvdMissing = 0 }) {
+export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhouse, forecast, sources, unassigned, dirty, debtors, channels, mvdPending = 0, mvdMissing = 0, tasks = [] }) {
   const empty = s.rooms === 0;
   return appLayout({
     title: 'Сводка',
@@ -86,6 +86,7 @@ export function dashboardPage({ req, hotel, msg, s, arrivals, departures, inhous
       ${unassigned ? html`<a class="alert" href="/app/chess">⚠ ${unassigned} бронь(и) без номера — распределите на шахматке</a>` : ''}
       ${dirty ? html`<a class="alert" href="/app/rooms#stock">🧹 ${dirty} номер(ов) ждут уборки</a>` : ''}
     </div>` : ''}
+    ${tasks.length ? html`<section class="card"><h2 class="h3">Задачи на сегодня и просроченные</h2><ul class="mini-list">${tasks.map((n) => html`<li><span><a href="/app/bookings/${n.booking_id}?tab=notes">${n.text}</a><small class="muted">${n.code} · ${n.guest_name}</small></span><span class="${n.due_at.slice(0, 10) < req.today ? 'late' : ''}">${n.due_at.slice(8, 10)}.${n.due_at.slice(5, 7)} ${n.due_at.slice(11, 16)}</span></li>`)}</ul></section>` : ''}
     <div class="app-cols">
       <section class="card"><h2 class="h3">Заезжают сегодня</h2>${miniList(arrivals, 'Сегодня заездов нет', 'checked_in', 'Заселить', req)}</section>
       <section class="card"><h2 class="h3">Выезжают сегодня</h2>${miniList(departures, 'Сегодня выездов нет', 'checked_out', 'Выселить', req)}</section>
@@ -114,14 +115,14 @@ export function bookingsTable(rows, empty, channels = []) {
     <thead><tr><th scope="col">Бронь</th><th scope="col">Создана</th><th scope="col">Источник</th><th scope="col">Гость</th><th scope="col">Номер</th><th scope="col">Даты</th><th scope="col">Сумма</th><th scope="col">Оплачено</th><th scope="col">Статус</th></tr></thead>
     <tbody>${rows.map((b) => html`<tr>
       <td><a href="/app/bookings/${b.id}">${b.code}</a></td><td>${b.created_at.slice(0, 16)}</td><td>${sourceName(b.source, channels)}</td>
-      <td>${b.guest_name}<small class="muted">${b.guest_phone}</small></td><td>${b.room_number ? `№ ${b.room_number}` : html`<span class="badge badge--warn">без номера</span>`}<small class="muted">${b.room_name}</small></td>
+      <td>${b.guest_name}${b.tags && b.tags.length ? html` ${b.tags.map((t) => html`<span class="tag tag--${t.color}">${t.name}</span>`)}` : ''}<small class="muted">${b.guest_phone}</small></td><td>${b.room_number ? `№ ${b.room_number}` : html`<span class="badge badge--warn">без номера</span>`}<small class="muted">${b.room_name}</small></td>
       <td>${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}</td><td>${rub(b.total)}</td>
       <td>${b.paid_amount >= b.total ? html`<span class="badge badge--confirmed">оплачено</span>` : b.paid_amount ? rub(b.paid_amount) : html`<span class="muted">нет</span>`}</td>
       <td>${statusBadge(b.status)}</td></tr>`)}</tbody>
   </table></div>`;
 }
 
-export function bookingsPage({ req, hotel, msg, rows, filters, channels, counts }) {
+export function bookingsPage({ req, hotel, msg, rows, filters, channels, counts, tags = [] }) {
   return appLayout({
     title: 'Журнал броней',
     req,
@@ -134,11 +135,12 @@ export function bookingsPage({ req, hotel, msg, rows, filters, channels, counts 
       ${field({ name: 'source', label: 'Источник', type: 'select', value: filters.source, options: [['', 'Все'], ['site', 'Сайт отеля'], ['extranet', 'Вручную'], ...channels.map((c) => [c.code, c.name])] })}
       ${field({ name: 'status', label: 'Статус', type: 'select', value: filters.status, options: [['', 'Все'], ['confirmed', 'Подтверждена'], ['checked_in', 'Проживает'], ['checked_out', 'Выехал'], ['cancelled', 'Отменена'], ['no_show', 'Незаезд']] })}
       ${field({ name: 'by', label: 'Даты', type: 'select', value: filters.by, options: [['created', 'по дате создания'], ['checkin', 'по дате заезда']] })}
+      ${tags.length ? field({ name: 'tag', label: 'Тег', type: 'select', value: filters.tag || '', options: [['', 'Все'], ...tags.map((t) => [t.id, t.name])] }) : ''}
       ${field({ name: 'from', label: 'С', type: 'date', value: filters.from })}
       ${field({ name: 'to', label: 'По', type: 'date', value: filters.to })}
       <button class="btn btn--primary" type="submit">Показать</button>
     </form>
-    <p class="muted">Найдено: ${rows.length}${counts ? ` · на сумму ${rub(counts.sum)}` : ''}</p>
+    <p class="muted">Найдено: ${rows.length}${counts ? ` · на сумму ${rub(counts.sum)}` : ''} · <a href="/app/bookings?${new URLSearchParams({ ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)), format: 'csv' })}">Скачать таблицу (Excel)</a></p>
     <section class="card">${bookingsTable(rows, 'По этим условиям броней нет', channels)}</section>`,
   });
 }

@@ -36,6 +36,7 @@ test('F01+F03+F02: guest books with promo and extras, hotelier sees it, guest ca
   await page.goto('/app/bookings');
   await page.getByRole('link', { name: code }).click();
   await expect(page.getByText('Тестовый Гость')).toBeVisible();
+  await page.getByRole('link', { name: 'Проживание и услуги' }).click();
   await expect(page.getByText('Трансфер с вокзала × 1')).toBeVisible();
 
   await page.goto('/h/severny-bereg/manage');

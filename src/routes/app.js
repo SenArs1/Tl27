@@ -12,6 +12,9 @@ import { roomsPage } from '../views/rooms.js';
 import * as S from '../views/settings.js';
 import { reportsPage } from '../views/reports.js';
 import { guestsSection, registrationCard } from '../views/guests.js';
+import { bookingCard, TABS } from '../views/card.js';
+import { confirmationDoc, invoiceDoc, receiptDoc } from '../views/docs.js';
+import { logEvent, historyOf, refund, voidPayment, transferPayment, setStayPrice, applyDiscount, addService, removeService, tagsOf, setTags, notesOf, tracked, TAG_COLORS } from '../lib/card.js';
 import { validateGuestDoc, mvdDeadline, splitName, isForeign } from '../lib/guests.js';
 import { DEMO } from '../seed.js';
 
@@ -125,13 +128,14 @@ export function appRouter(db, { showDemo }) {
     const unassigned = db.prepare(`select count(distinct s.booking_id) n from stay_segments s join bookings b on b.id = s.booking_id
       where s.hotel_id = ? and s.room_id is null and b.status in ('confirmed','checked_in') and s.end > ?`).get(hid, t).n;
     const dirty = db.prepare("select count(*) n from rooms where hotel_id = ? and active = 1 and status = 'dirty'").get(hid).n;
+    const tasks = db.prepare('select n.*, b.code, b.guest_name from booking_notes n join bookings b on b.id = n.booking_id where n.hotel_id = ? and n.done = 0 and n.due_at is not null and date(n.due_at) <= ? order by n.due_at limit 10').all(hid, t);
     // Guests in house or already gone whose data has not been passed to the migration service.
     const mvdPending = db.prepare(`select count(*) n from booking_guests g join bookings b on b.id = g.booking_id
       where g.hotel_id = ? and g.mvd_status = 'new' and b.status in ('checked_in','checked_out')`).get(hid).n;
     const mvdMissing = db.prepare(`select coalesce(sum(b.adults + b.children - (select count(*) from booking_guests g where g.booking_id = b.id)), 0) n
       from bookings b where b.hotel_id = ? and b.status = 'checked_in' and (select count(*) from booking_guests g where g.booking_id = b.id) < b.adults + b.children`).get(hid).n;
     res.send(A.dashboardPage({
-      req, hotel: req.hotelRow, msg: req.msg, arrivals, departures, inhouse, forecast, unassigned, dirty, mvdPending, mvdMissing, debtors: debtRow.n, channels: req.s.channels(),
+      req, hotel: req.hotelRow, msg: req.msg, arrivals, departures, inhouse, forecast, unassigned, dirty, mvdPending, mvdMissing, tasks, debtors: debtRow.n, channels: req.s.channels(),
       sources: src.map((x) => ({ ...x, pct: totalN ? Math.round((x.n / totalN) * 100) : 0 })),
       s: { rooms, occupied, occupancy: rooms ? Math.round((occupied / rooms) * 100) : 0, monthRevenue: occ.totals.revenue, adr: occ.totals.adr, revpar: occ.totals.revpar, debt: debtRow.s, cancelled30 },
     }));
@@ -184,23 +188,48 @@ export function appRouter(db, { showDemo }) {
       dirty: rooms.filter((r) => r.status === 'dirty').length,
       repair: rooms.filter((r) => r.status === 'repair').length,
     };
-    res.send(chessPage({ req, hotel: h, from, days, sort, typeFilter, types, rooms, bookings, free, today: t, nowTime, stats, msg: req.msg, channels: req.s.channels() }));
+    // Tags per booking for the corner mark and the filter; open tasks for the strip.
+    const tags = db.prepare('select * from hotel_tags where hotel_id = ? and active = 1 order by name').all(h.id);
+    const tagMap = new Map();
+    for (const x of db.prepare('select bt.booking_id, t.id, t.name, t.color from booking_tags bt join hotel_tags t on t.id = bt.tag_id where t.hotel_id = ? and t.active = 1').all(h.id)) {
+      (tagMap.get(x.booking_id) || tagMap.set(x.booking_id, []).get(x.booking_id)).push(x);
+    }
+    bookings.forEach((x) => { x.tags = tagMap.get(x.id) || []; });
+    stats.tasks = one(`select count(*) n from booking_notes where hotel_id = ? and done = 0 and due_at is not null and date(due_at) <= ?`, t);
+    res.send(chessPage({ req, hotel: h, from, days, sort, typeFilter, types, rooms, bookings, free, today: t, nowTime, stats, tags, msg: req.msg, channels: req.s.channels() }));
   });
 
   // ---------- bookings ----------
   r.get('/bookings', (req, res) => {
-    const f = { q: str(req.query.q, 100), status: str(req.query.status, 20), source: str(req.query.source, 40), by: req.query.by === 'checkin' ? 'checkin' : 'created', from: str(req.query.from, 10), to: str(req.query.to, 10) };
+    const f = { q: str(req.query.q, 100), status: str(req.query.status, 20), source: str(req.query.source, 40), by: req.query.by === 'checkin' ? 'checkin' : 'created', from: str(req.query.from, 10), to: str(req.query.to, 10), tag: int(req.query.tag) };
     let sql = BOOKING_LIST;
     const p = [req.user.hotel_id];
     if (f.q) { sql += ' and (b.guest_name like ? or b.guest_email like ? or b.guest_phone like ? or b.code like ? or b.channel_ref like ?)'; const like = `%${f.q}%`; p.push(like, like, like, like, like); }
     if (f.status) { sql += ' and b.status = ?'; p.push(f.status); }
     if (f.source) { sql += ' and b.source = ?'; p.push(f.source); }
+    if (f.tag) { sql += ' and exists (select 1 from booking_tags bt join hotel_tags t on t.id = bt.tag_id where bt.booking_id = b.id and t.id = ? and t.hotel_id = b.hotel_id)'; p.push(f.tag); }
     const col = f.by === 'checkin' ? 'b.checkin' : 'date(b.created_at)';
     if (isIsoDate(f.from)) { sql += ` and ${col} >= ?`; p.push(f.from); }
     if (isIsoDate(f.to)) { sql += ` and ${col} <= ?`; p.push(f.to); }
     sql += f.by === 'checkin' ? ' order by b.checkin, b.id limit 1000' : ' order by b.id desc limit 1000';
     const rows = db.prepare(sql).all(...p);
-    res.send(A.bookingsPage({ req, hotel: req.hotelRow, msg: req.msg, rows, filters: f, channels: req.s.channels(), counts: { sum: rows.filter((b) => b.status !== 'cancelled').reduce((s, b) => s + b.total, 0) } }));
+    const channels = req.s.channels();
+    const tags = db.prepare('select * from hotel_tags where hotel_id = ? order by name').all(req.user.hotel_id);
+    const tagMap = new Map();
+    for (const t of db.prepare('select bt.booking_id, t.* from booking_tags bt join hotel_tags t on t.id = bt.tag_id where t.hotel_id = ?').all(req.user.hotel_id)) {
+      (tagMap.get(t.booking_id) || tagMap.set(t.booking_id, []).get(t.booking_id)).push(t);
+    }
+    rows.forEach((b) => { b.tags = tagMap.get(b.id) || []; });
+    // The same list as a spreadsheet (opens in Excel; ";" separator, UTF-8 with BOM).
+    if (req.query.format === 'csv') {
+      const st = { confirmed: 'подтверждена', checked_in: 'проживает', checked_out: 'выехал', cancelled: 'отменена', no_show: 'незаезд' };
+      return sendCsv(res, `bookings-${req.today}.csv`, [
+        ['Бронь', 'Создана', 'Источник', 'Номер в канале', 'Гость', 'Телефон', 'Почта', 'Заказчик', 'Категория', 'Номер', 'Заезд', 'Выезд', 'Взрослые', 'Дети', 'Сумма', 'Оплачено', 'Долг', 'Статус', 'Теги'],
+        ...rows.map((b) => [b.code, b.created_at, A.sourceName(b.source, channels), b.channel_ref || '', b.guest_name, b.guest_phone, b.guest_email, b.customer_name, b.room_name, b.room_number || '',
+          b.checkin, b.checkout, b.adults, b.children, b.total, b.paid_amount, b.total - b.paid_amount, st[b.status] || b.status, b.tags.map((t) => t.name).join(', ')]),
+      ]);
+    }
+    res.send(A.bookingsPage({ req, hotel: req.hotelRow, msg: req.msg, rows, filters: f, channels, tags, counts: { sum: rows.filter((b) => b.status !== 'cancelled').reduce((s, b) => s + b.total, 0) } }));
   });
 
   const newBookingView = (req, values, extra = {}) => A.newBookingPage({
@@ -272,7 +301,7 @@ export function appRouter(db, { showDemo }) {
     const amount = int(req.body.pay_amount);
     const method = ['cash', 'card', 'transfer'].includes(req.body.pay_method) ? req.body.pay_method : 'card';
     if (amount < 0 || amount > b.total - b.paid_amount) return back(res, ret, 'Сумма оплаты больше долга по брони', true);
-    tx(db, () => {
+    tracked(db, b.id, req.user, undo ? 'Отмена выселения' : '', () => tx(db, () => {
       if (to === 'cancelled') cancelBooking(db, b);
       else if (to === 'no_show') markNoShow(db, b);
       else {
@@ -288,7 +317,7 @@ export function appRouter(db, { showDemo }) {
         }
       }
       if (amount > 0 && ['checked_in', 'checked_out'].includes(to)) addPayment(db, b, amount, method, to === 'checked_in' ? 'При заселении' : 'При выезде', req.user.id);
-    });
+    }));
     const docs = db.prepare('select count(*) n from booking_guests where booking_id = ?').get(b.id).n;
     const docsNote = to === 'checked_in' && !undo && docs < b.adults + b.children ? '. Внесите документы гостей для МВД' : '';
     const text = undo ? `Выселение отменено: ${b.guest_name} снова проживает`
@@ -296,13 +325,15 @@ export function appRouter(db, { showDemo }) {
     back(res, ret + (docsNote && ret.startsWith('/app/bookings/') ? '#guests' : ''), text);
   });
   // Shared reply for the chessboard (JSON) and the booking card (form + redirect).
-  const reply = (req, res, b, fn, okText) => {
+  // Every change is written to the booking's history.
+  const reply = (req, res, b, fn, okText, prefix = '') => {
+    const ret = retTo(req, `/app/bookings/${b.id}`);
     try {
-      const text = okText(fn());
-      return wantsJson(req) ? res.json({ ok: true, message: text }) : back(res, `/app/bookings/${b.id}`, text);
+      const text = okText(tracked(db, b.id, req.user, prefix, fn));
+      return wantsJson(req) ? res.json({ ok: true, message: text }) : back(res, ret, text);
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
-      return wantsJson(req) ? res.status(409).json({ error: e.message }) : back(res, `/app/bookings/${b.id}`, e.message, true);
+      return wantsJson(req) ? res.status(409).json({ error: e.message }) : back(res, ret, e.message, true);
     }
   };
   r.post('/bookings/:id/move', (req, res, next) => {
@@ -312,14 +343,14 @@ export function appRouter(db, { showDemo }) {
     if (req.body.room_id && !target) return wantsJson(req) ? res.status(404).json({ error: 'Номер не найден' }) : next();
     const segId = int(req.body.segment_id);
     reply(req, res, b, () => (segId ? moveSegment(db, b, segId, target ? target.id : null) : moveBooking(db, b, target ? target.id : null)),
-      () => (target ? `Перенесено в номер ${target.number}` : 'Номер снят с брони'));
+      () => (target ? `Перенесено в номер ${target.number}` : 'Номер снят с брони'), 'Переселение');
   });
   r.post('/bookings/:id/split', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
     const target = req.s.room(req.body.room_id);
-    if (!target) return back(res, `/app/bookings/${b.id}`, 'Выберите номер для переселения', true);
-    reply(req, res, b, () => splitStay(db, b, String(req.body.date || ''), target.id), () => `С ${String(req.body.date).split('-').reverse().join('.')} гость живёт в номере ${target.number}`);
+    if (!target) return back(res, retTo(req, `/app/bookings/${b.id}`), 'Выберите номер для переселения', true);
+    reply(req, res, b, () => splitStay(db, b, String(req.body.date || ''), target.id), () => `С ${String(req.body.date).split('-').reverse().join('.')} гость живёт в номере ${target.number}`, 'Переселение');
   });
   r.post('/bookings/:id/dates', (req, res, next) => {
     const b = req.s.booking(req.params.id);
@@ -338,11 +369,13 @@ export function appRouter(db, { showDemo }) {
     const room = body.room_id ? req.s.room(body.room_id) : null;
     if (body.room_id && !room) return res.status(404).json({ error: 'Номер не найден' });
     try {
-      const result = relocate(db, req.hotelRow, b, {
+      const dry = req.query.dry === '1';
+      const run = () => relocate(db, req.hotelRow, b, {
         segmentId: int(body.segment_id), roomId: body.room_id === undefined ? undefined : room ? room.id : null,
         checkin: isIsoDate(body.checkin) ? body.checkin : undefined, checkout: isIsoDate(body.checkout) ? body.checkout : undefined,
-        keepPrice: body.keep_price !== false && body.keep_price !== 'false', today: req.today, dryRun: req.query.dry === '1',
+        keepPrice: body.keep_price !== false && body.keep_price !== 'false', today: req.today, dryRun: dry,
       });
+      const result = dry ? run() : tracked(db, b.id, req.user, 'Перенос на шахматке', run);
       res.json({ ok: true, ...result, message: req.query.dry === '1' ? '' : 'Бронь перенесена' });
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
@@ -355,7 +388,7 @@ export function appRouter(db, { showDemo }) {
     if (!b) return next();
     const segs = db.prepare('select s.*, r.number from stay_segments s left join rooms r on r.id = s.room_id where s.booking_id = ? order by s.start').all(b.id);
     res.set('Cache-Control', 'no-store');
-    res.send(peekPanel({ req, b, segs, rate: req.s.rate(b.rate_plan_id), channels: req.s.channels(), back: retTo({ body: { back: req.query.back } }, '/app/chess'), nowLocal: `${req.today}T${timeIn(req.hotelRow.timezone)}` }).value);
+    res.send(peekPanel({ req, b, segs, rate: req.s.rate(b.rate_plan_id), channels: req.s.channels(), tags: tagsOf(db, b.id), notes: notesOf(db, b.id).filter((n) => !n.done), back: retTo({ body: { back: req.query.back } }, '/app/chess'), nowLocal: `${req.today}T${timeIn(req.hotelRow.timezone)}` }).value);
   });
   r.post('/chess/assign', (req, res) => {
     const { placed, left } = assignUnassigned(db, req.user.hotel_id);
@@ -374,23 +407,31 @@ export function appRouter(db, { showDemo }) {
     const values = extra.values || (guests.length ? {} : splitName(b.guest_name));
     return guestsSection({ req, b, guests, today: req.today, values, ...extra });
   };
-  const bookingPage = (req, b, extra) => A.bookingDetailPage({
-    req, hotel: req.hotelRow, b, room: db.prepare('select * from room_types where id = ?').get(b.room_type_id),
-    rate: db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id),
-    segments: db.prepare('select s.*, r.number, t.name as type_name from stay_segments s left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start').all(b.id),
-    rooms: req.s.rooms(), payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id), channels: req.s.channels(), msg: req.msg,
-    guests: guestsBlock(req, b, extra),
-  });
+  const bookingPage = (req, b, extra = {}) => {
+    const tab = TABS.some(([k]) => k === req.query.tab) ? req.query.tab : extra.tab || 'details';
+    const tags = db.prepare('select * from hotel_tags where hotel_id = ? and active = 1 order by name').all(req.user.hotel_id);
+    const guestList = guestsOf(b);
+    return bookingCard({
+      req, hotel: req.hotelRow, b, tab, msg: req.msg, channels: req.s.channels(), today: req.today,
+      rate: req.s.rate(b.rate_plan_id), rooms: req.s.rooms(), tags, tagIds: tagsOf(db, b.id).map((t) => t.id),
+      segments: db.prepare('select s.*, r.number, t.name as type_name from stay_segments s left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start').all(b.id),
+      payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id),
+      extrasCatalog: db.prepare('select e.*, g.name as group_name from extras e left join extra_groups g on g.id = e.group_id where e.hotel_id = ? and e.active = 1 order by g.sort, e.name').all(req.user.hotel_id),
+      notes: notesOf(db, b.id), history: historyOf(db, b.id), guestList, guestCount: guestList.length,
+      guests: tab === 'guests' ? guestsBlock(req, b, extra) : '',
+    });
+  };
   const ownGuest = (req, b) => db.prepare('select * from booking_guests where id = ? and booking_id = ? and hotel_id = ?').get(int(req.params.gid), b.id, req.user.hotel_id);
   const GUEST_COLS = ['last_name', 'first_name', 'middle_name', 'birth_date', 'sex', 'citizenship', 'doc_type', 'doc_series', 'doc_number', 'doc_issued_at', 'doc_issued_by', 'doc_code', 'reg_address', 'migration_card', 'visa'];
   r.post('/bookings/:id/guests', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
     const v = validateGuestDoc(req.body, { checkin: b.checkin });
-    if (!v.ok) return res.status(422).send(bookingPage(req, b, { values: req.body, errors: v.errors, open: true }));
+    if (!v.ok) return res.status(422).send(bookingPage(req, b, { values: req.body, errors: v.errors, open: true, tab: 'guests' }));
     db.prepare(`insert into booking_guests (booking_id, hotel_id, ${GUEST_COLS.join(', ')}) values (?, ?, ${GUEST_COLS.map(() => '?').join(', ')})`)
       .run(b.id, req.user.hotel_id, ...GUEST_COLS.map((k) => v.guest[k]));
-    back(res, `/app/bookings/${b.id}#guests`, `${v.guest.last_name} ${v.guest.first_name} добавлен(а)`);
+    logEvent(db, b, req.user, 'Добавлен гость', '', `${v.guest.last_name} ${v.guest.first_name}`);
+    back(res, `/app/bookings/${b.id}?tab=guests`, `${v.guest.last_name} ${v.guest.first_name} добавлен(а)`);
   });
   r.post('/bookings/:id/guests/:gid', (req, res, next) => {
     const b = req.s.booking(req.params.id);
@@ -399,16 +440,18 @@ export function appRouter(db, { showDemo }) {
     // The number is never sent back to the browser; an empty field keeps the stored one.
     const body = { ...req.body, doc_number: String(req.body.doc_number || '').trim() || g.doc_number };
     const v = validateGuestDoc(body, { checkin: b.checkin });
-    if (!v.ok) return back(res, `/app/bookings/${b.id}#guests`, Object.values(v.errors)[0], true);
+    if (!v.ok) return back(res, `/app/bookings/${b.id}?tab=guests`, Object.values(v.errors)[0], true);
     db.prepare(`update booking_guests set ${GUEST_COLS.map((k) => `${k} = ?`).join(', ')} where id = ?`).run(...GUEST_COLS.map((k) => v.guest[k]), g.id);
-    back(res, `/app/bookings/${b.id}#guests`, 'Данные гостя сохранены');
+    logEvent(db, b, req.user, 'Изменены данные гостя', '', `${v.guest.last_name} ${v.guest.first_name}`);
+    back(res, `/app/bookings/${b.id}?tab=guests`, 'Данные гостя сохранены');
   });
   r.post('/bookings/:id/guests/:gid/delete', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     const g = b && ownGuest(req, b);
     if (!g) return next();
     db.prepare('delete from booking_guests where id = ?').run(g.id);
-    back(res, `/app/bookings/${b.id}#guests`, 'Данные гостя удалены');
+    logEvent(db, b, req.user, 'Удалены данные гостя', `${g.last_name} ${g.first_name}`, '');
+    back(res, `/app/bookings/${b.id}?tab=guests`, 'Данные гостя удалены');
   });
   r.post('/bookings/:id/guests/:gid/mvd', (req, res, next) => {
     const b = req.s.booking(req.params.id);
@@ -416,7 +459,8 @@ export function appRouter(db, { showDemo }) {
     if (!g) return next();
     const status = ['new', 'sent', 'not_required'].includes(req.body.status) ? req.body.status : 'sent';
     db.prepare("update booking_guests set mvd_status = ?, mvd_sent_at = case when ? = 'sent' then datetime('now') else null end where id = ?").run(status, status, g.id);
-    back(res, `/app/bookings/${b.id}#guests`, status === 'sent' ? 'Отмечено: сведения переданы в МВД' : 'Отметка снята');
+    logEvent(db, b, req.user, `МВД: ${g.last_name} ${g.first_name}`, g.mvd_status === 'sent' ? 'отправлено' : 'не отправлено', status === 'sent' ? 'отправлено' : status === 'new' ? 'не отправлено' : 'не требуется');
+    back(res, `/app/bookings/${b.id}?tab=guests`, status === 'sent' ? 'Отмечено: сведения переданы в МВД' : 'Отметка снята');
   });
   r.get('/bookings/:id/guests/:gid/card', (req, res, next) => {
     const b = req.s.booking(req.params.id);
@@ -437,6 +481,104 @@ export function appRouter(db, { showDemo }) {
     back(res, backTo, `Отмечено гостей: ${n}`);
   });
 
+  // ---------- booking card: details, tags, price, services, money, notes, documents ----------
+  const cardAction = (path, handler) => r.post(`/bookings/:id/${path}`, (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const ret = retTo(req, `/app/bookings/${b.id}`);
+    try {
+      handler(req, res, b, ret);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      back(res, ret, e.message, true);
+    }
+  });
+  cardAction('details', (req, res, b, ret) => {
+    const x = req.body;
+    const name = str(x.guest_name, 120);
+    const phone = str(x.guest_phone, 40);
+    const email = str(x.guest_email, 200).toLowerCase();
+    const time = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(v || '') ? v : '');
+    if (name.length < 2) throw new BookingError('name', 'Укажите ФИО гостя');
+    if (phone.replace(/\D/g, '').length < 10) throw new BookingError('phone', 'Нужен телефон, хотя бы 10 цифр');
+    if (email && !isEmail(email)) throw new BookingError('email', 'Проверьте адрес почты');
+    tracked(db, b.id, req.user, '', () => db.prepare(`update bookings set guest_name=?, guest_phone=?, guest_email=?, customer_name=?, customer_phone=?, customer_inn=?,
+      purpose=?, arrival_time=?, departure_time=?, comment=? where id = ?`).run(name, phone, email, str(x.customer_name, 160), str(x.customer_phone, 40),
+      str(x.customer_inn, 12).replace(/\D/g, ''), ['', 'tourism', 'business', 'treatment', 'event', 'transit', 'other'].includes(x.purpose) ? x.purpose : '',
+      time(x.arrival_time), time(x.departure_time), str(x.comment, 1000), b.id));
+    back(res, ret, 'Сохранено');
+  });
+  cardAction('tags', (req, res, b, ret) => {
+    setTags(db, b, arr(req.body.tags).map((v) => int(v)), req.user);
+    back(res, ret, 'Теги сохранены');
+  });
+  cardAction('price', (req, res, b, ret) => {
+    setStayPrice(db, req.hotelRow, b, int(req.body.stay, -1), str(req.body.reason, 200), req.user);
+    back(res, ret, 'Стоимость проживания изменена');
+  });
+  cardAction('discount', (req, res, b, ret) => {
+    const v = int(req.body.value);
+    applyDiscount(db, req.hotelRow, b, req.body.unit === 'sum' ? { sum: v } : { pct: v }, str(req.body.reason, 200), req.user);
+    back(res, ret, 'Скидка применена');
+  });
+  cardAction('services', (req, res, b, ret) => {
+    const qty = req.body.qty ? int(req.body.qty) : 0;
+    if (req.body.extra_id) addService(db, b, { extraId: int(req.body.extra_id), qty }, req.user);
+    else addService(db, b, { name: req.body.name, price: int(req.body.price, -1), qty: qty || 1 }, req.user);
+    back(res, ret, 'Услуга добавлена');
+  });
+  r.post('/bookings/:id/services/:idx/delete', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const ret = retTo(req, `/app/bookings/${b.id}`);
+    try { removeService(db, b, int(req.params.idx, -1), req.user); } catch (e) { if (!(e instanceof BookingError)) throw e; return back(res, ret, e.message, true); }
+    back(res, ret, 'Услуга убрана');
+  });
+  cardAction('refund', (req, res, b, ret) => {
+    const method = ['cash', 'card', 'transfer'].includes(req.body.method) ? req.body.method : 'cash';
+    refund(db, b, int(req.body.amount), method, str(req.body.reason, 200), req.user);
+    back(res, ret, 'Возврат оформлен');
+  });
+  r.post('/bookings/:id/payments/:pid/void', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b) return next();
+    const ret = retTo(req, `/app/bookings/${b.id}`);
+    try { voidPayment(db, b, int(req.params.pid), str(req.body.reason, 200), req.user); } catch (e) { if (!(e instanceof BookingError)) throw e; return back(res, ret, e.message, true); }
+    back(res, ret, 'Платёж аннулирован');
+  });
+  cardAction('transfer', (req, res, b, ret) => {
+    const target = db.prepare('select * from bookings where code = ? and hotel_id = ?').get(str(req.body.code, 20).toUpperCase(), req.user.hotel_id);
+    if (!target) throw new BookingError('target', 'Бронь с таким номером не найдена в этом объекте');
+    transferPayment(db, b, target, int(req.body.amount), req.user);
+    back(res, ret, `Оплата перенесена в бронь ${target.code}`);
+  });
+  cardAction('notes', (req, res, b, ret) => {
+    const text = str(req.body.text, 500);
+    if (text.length < 2) throw new BookingError('note', 'Напишите текст заметки');
+    const due = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(req.body.due_at || '') ? `${req.body.due_at.replace('T', ' ')}:00` : null;
+    db.prepare('insert into booking_notes (booking_id, hotel_id, text, due_at, created_by) values (?,?,?,?,?)').run(b.id, b.hotel_id, text, due, req.user.name);
+    logEvent(db, b, req.user, due ? 'Задача' : 'Заметка', '', `${text}${due ? ` (срок ${due.slice(0, 16)})` : ''}`);
+    back(res, ret, due ? 'Задача добавлена' : 'Заметка добавлена');
+  });
+  r.post('/bookings/:id/notes/:nid/toggle', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    const n = b && db.prepare('select * from booking_notes where id = ? and booking_id = ?').get(int(req.params.nid), b.id);
+    if (!n) return next();
+    db.prepare('update booking_notes set done = 1 - done where id = ?').run(n.id);
+    if (!n.done) logEvent(db, b, req.user, 'Задача выполнена', '', n.text);
+    back(res, retTo(req, `/app/bookings/${b.id}?tab=notes`), n.done ? 'Задача снова в работе' : 'Отмечено выполненным');
+  });
+  r.get('/bookings/:id/doc/:kind', (req, res, next) => {
+    const b = req.s.booking(req.params.id);
+    if (!b || !['confirmation', 'invoice', 'receipt'].includes(req.params.kind)) return next();
+    const rooms = db.prepare(`select group_concat(x, ' → ') r from (select coalesce('№ ' || r.number, 'без номера') || ', ' || t.name x from stay_segments s
+      left join rooms r on r.id = s.room_id join room_types t on t.id = s.room_type_id where s.booking_id = ? order by s.start)`).get(b.id).r;
+    res.set('Cache-Control', 'no-store');
+    if (req.params.kind === 'confirmation') return res.send(confirmationDoc({ hotel: req.hotelRow, b, rooms, rate: req.s.rate(b.rate_plan_id) }));
+    if (req.params.kind === 'invoice') return res.send(invoiceDoc({ hotel: req.hotelRow, b }));
+    res.send(receiptDoc({ hotel: req.hotelRow, b, payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id) }));
+  });
+
   r.post('/bookings/:id/pay', (req, res, next) => {
     const b = req.s.booking(req.params.id);
     if (!b) return next();
@@ -444,7 +586,7 @@ export function appRouter(db, { showDemo }) {
     const method = ['cash', 'card', 'transfer'].includes(req.body.method) ? req.body.method : 'cash';
     if (amount < 1 || amount > 10000000) return back(res, retTo(req, `/app/bookings/${b.id}`), 'Укажите сумму', true);
     if (amount > b.total - b.paid_amount) return back(res, retTo(req, `/app/bookings/${b.id}`), 'Сумма больше долга по брони', true);
-    addPayment(db, b, amount, method, '', req.user.id);
+    tracked(db, b.id, req.user, `Оплата (${method === 'cash' ? 'наличные' : method === 'card' ? 'карта' : 'перевод'})`, () => addPayment(db, b, amount, method, '', req.user.id));
     back(res, retTo(req, `/app/bookings/${b.id}`), 'Оплата принята');
   });
 
@@ -903,6 +1045,32 @@ export function appRouter(db, { showDemo }) {
     const { hotelId } = createHotel(db, { name, city: str(req.body.city, 80), propertyType: type, ownerUserId: req.user.id });
     db.prepare('update sessions set hotel_id = ? where id = ?').run(hotelId, req.session.id);
     back(res, '/app/rooms', `Объект «${name}» создан — начните с категорий и номеров`);
+  });
+  // Tags are reference data: any member of the hotel's team can maintain them.
+  r.get('/settings/tags', (req, res) => res.send(S.settingsTags({ req, hotel: req.hotelRow, msg: req.msg,
+    tags: db.prepare('select t.*, (select count(*) from booking_tags bt where bt.tag_id = t.id) uses from hotel_tags t where t.hotel_id = ? order by t.name').all(req.user.hotel_id) })));
+  const tagColor = (c) => (TAG_COLORS.some(([k]) => k === c) ? c : 'teal');
+  r.post('/settings/tags', (req, res) => {
+    const name = str(req.body.name, 30);
+    if (name.length < 2) return back(res, '/app/settings/tags', 'Укажите название тега', true);
+    try {
+      db.prepare('insert into hotel_tags (hotel_id, name, color) values (?,?,?)').run(req.user.hotel_id, name, tagColor(req.body.color));
+    } catch {
+      return back(res, '/app/settings/tags', 'Такой тег уже есть', true);
+    }
+    back(res, '/app/settings/tags', `Тег «${name}» добавлен`);
+  });
+  r.post('/settings/tags/:id', (req, res, next) => {
+    const t = db.prepare('select * from hotel_tags where id = ? and hotel_id = ?').get(int(req.params.id), req.user.hotel_id);
+    if (!t) return next();
+    const name = str(req.body.name, 30);
+    if (name.length < 2) return back(res, '/app/settings/tags', 'Укажите название тега', true);
+    try {
+      db.prepare('update hotel_tags set name = ?, color = ?, active = ? where id = ?').run(name, tagColor(req.body.color), req.body.active === 'on' ? 1 : 0, t.id);
+    } catch {
+      return back(res, '/app/settings/tags', 'Такой тег уже есть', true);
+    }
+    back(res, '/app/settings/tags', 'Тег сохранён');
   });
   r.get('/settings/widget', (req, res) => res.send(S.settingsWidget({ req, hotel: req.hotelRow, origin: `${req.protocol}://${req.get('host')}`, msg: req.msg })));
 

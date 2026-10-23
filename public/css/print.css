@@ -11,3 +11,5 @@ body.regcard { font-family: "Manrope", system-ui, sans-serif; color: #111; backg
 .regcard footer { margin-top: 32px; font-size: 11px; color: #555; }
 .regcard .noprint button { font: inherit; padding: 8px 16px; }
 @media print { .noprint { display: none; } .regcard main { padding: 0; } @page { size: A4; margin: 15mm; } }
+.regcard .doc-h2 { font-size: 18px; margin: 18px 0 8px; }
+.regcard thead th { background: #e9e9e9; }

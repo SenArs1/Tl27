@@ -6,6 +6,7 @@ import { PROPERTY_TYPES } from '../lib/hotels.js';
 const TABS = [
   ['/app/settings', 'Объект'],
   ['/app/settings/booking', 'Бронирование и оплата'],
+  ['/app/settings/tags', 'Теги'],
   ['/app/settings/team', 'Сотрудники'],
   ['/app/settings/properties', 'Мои объекты'],
   ['/app/settings/widget', 'Модуль на сайт'],
@@ -137,5 +138,24 @@ export function settingsWidget({ req, hotel, origin, msg }) {
       <button class="btn btn--secondary btn--sm" type="button" data-copy="${embed}">Скопировать код</button>
       <p>Или дайте гостям прямую ссылку: <a href="/h/${hotel.slug}">${origin}/h/${hotel.slug}</a></p>
       <p><a href="/widget-demo?hotel=${hotel.slug}">Посмотреть виджет на тестовой странице</a></p>
+    </section>`);
+}
+
+const COLORS = [['teal', 'бирюзовый'], ['violet', 'фиолетовый'], ['amber', 'янтарный'], ['rose', 'розовый'], ['blue', 'синий'], ['slate', 'серый']];
+
+export function settingsTags({ req, hotel, tags, msg }) {
+  return page(req, hotel, msg, 'Теги', html`<section class="card"><h2 class="h3">Теги броней</h2>
+      <p class="muted">Метки для броней: «VIP», «Ранний заезд», «Группа конференции». Ставятся в карточке брони; на шахматке бронь с тегом помечена уголком, и по тегам работает фильтр.</p>
+      ${tags.length ? html`<ul class="mini-list">${tags.map((t) => html`<li><span><span class="tag tag--${t.color}">${t.name}</span>${t.active ? '' : html` <small class="muted">скрыт</small>`} <small class="muted">${t.uses} броней</small></span>
+        <span class="actions"><details class="row-edit"><summary>Изменить</summary><form class="form form--inline" method="post" action="/app/settings/tags/${t.id}">${csrf(req)}
+          ${field({ prefix: `tg${t.id}`, name: 'name', label: 'Название', value: t.name, attrs: 'required maxlength="30"' })}
+          ${field({ prefix: `tg${t.id}`, name: 'color', label: 'Цвет', type: 'select', value: t.color, options: COLORS })}
+          <label class="check"><input type="checkbox" name="active" ${t.active ? raw('checked') : ''}><span>Активен</span></label>
+          <button class="btn btn--primary btn--sm" type="submit">Сохранить</button></form></details></span></li>`)}</ul>`
+        : html`<p class="muted">Тегов пока нет.</p>`}
+      <form class="form form--inline" method="post" action="/app/settings/tags">${csrf(req)}
+        ${field({ prefix: 'tgn', name: 'name', label: 'Новый тег', attrs: 'required maxlength="30" placeholder="например, VIP"' })}
+        ${field({ prefix: 'tgn', name: 'color', label: 'Цвет', type: 'select', options: COLORS })}
+        <button class="btn btn--primary" type="submit">Добавить</button></form>
     </section>`);
 }

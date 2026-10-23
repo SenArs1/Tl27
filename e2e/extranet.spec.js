@@ -29,7 +29,7 @@ test('chessboard: click an empty cell to book, drag the booking to another room'
   await page.getByLabel('Телефон').fill('+7 900 555-44-33');
   await page.getByRole('button', { name: 'Создать бронь' }).click();
   await expect(page.getByText(/Бронь SR-[0-9A-F]+ создана/)).toBeVisible();
-  await expect(page.locator('dd', { hasText: '№ 402' })).toBeVisible();
+  await expect(page.locator('.card-head', { hasText: '№ 402' })).toBeVisible();
 
   await page.goto(`/app/chess?from=${day(90)}&days=14&sort=category`);
   const bar = page.locator('.chess__bar', { hasText: 'Шахматов Пётр' });
@@ -58,9 +58,10 @@ test('booking card: move via form, take payment, check in', async ({ page }) => 
   await page.getByLabel('Телефон').fill('+7 900 555-00-11');
   await page.getByRole('button', { name: 'Создать бронь' }).click();
   await expect(page.getByText(/создана/)).toBeVisible();
+  await page.getByRole('link', { name: 'Счёт и платежи' }).click();
   await page.getByRole('button', { name: 'Принять оплату' }).click();
   await expect(page.getByText('Оплачено полностью')).toBeVisible();
-  await page.getByRole('button', { name: 'Заселить' }).click();
+  await page.locator('.card-head').getByRole('button', { name: 'Заселить' }).click();
   await expect(page.getByText('Кассов Иван заселён')).toBeVisible();
   await axe(page);
 });
@@ -178,7 +179,7 @@ test('booking card: split the stay and change dates with the form', async ({ pag
   await page.getByLabel('в номер', { exact: true }).selectOption({ label: '№ 305 — Стандарт с видом на озеро' });
   await page.getByRole('button', { name: 'Разделить проживание' }).click();
   await expect(page.getByText(/гость живёт в номере 305/)).toBeVisible();
-  await expect(page.locator('dd', { hasText: '→ № 305' })).toBeVisible();
+  await expect(page.locator('.card-head', { hasText: '→ № 305' })).toBeVisible();
   await expect(page.locator('.segments li')).toHaveCount(2);
   await axe(page);
 

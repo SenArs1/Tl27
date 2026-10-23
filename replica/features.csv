@@ -54,7 +54,7 @@ Payments in booking card and balances,extranet,must,yes,yes,cash / card / transf
 Check-in requires an assigned room; checkout marks room dirty,extranet,should,yes,yes,
 "Tourist tax: rate, 100 RUB/night minimum, lodging-only base, report",extranet,must,yes,yes,
 Booking journal with source filter and channel reference,extranet,must,yes,yes,
-Booking change history,extranet,should,yes,no,next
+Booking change history,extranet,should,yes,yes,who/when/what/old/new for every action
 Reports: occupancy/ADR/RevPAR by day and category,reports,must,yes,yes,
 Reports: sales by source and cancellations,reports,should,yes,yes,
 Reports: arrivals / departures / in-house lists,reports,should,yes,yes,
@@ -71,4 +71,11 @@ Chessboard side panel with quick actions,extranet,should,yes,yes,"check-in/out w
 Drag to room and dates with before/after preview and keep-price option,extranet,should,yes,yes,
 Placement mode for new bookings (auto / unassigned row) and auto-assign,extranet,could,yes,yes,
 Hourly bookings,extranet,could,yes,no,separate mode
-Booking tags and notes with due dates,extranet,should,yes,no,"next, with the booking card"
+Booking tags and notes with due dates,extranet,should,yes,yes,"tags with colours, chessboard mark and filter; notes/tasks with deadlines on dashboard"
+"Booking card tabs (details, stay & services, payments, guests, documents, notes, history)",extranet,must,yes,yes,
+"Refund, void payment, transfer payment to another booking",extranet,should,yes,yes,
+"Printable confirmation, invoice, payment statement",extranet,should,yes,yes,
+Booking journal export to Excel,extranet,should,yes,yes,CSV with filters
+Several invoices per booking for different payers,extranet,could,yes,no,
+Security deposit,extranet,could,yes,no,
+Group bookings,extranet,should,yes,no,separate project

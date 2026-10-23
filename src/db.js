@@ -129,6 +129,45 @@ create table if not exists booking_guests (
 );
 create index if not exists booking_guests_booking on booking_guests(booking_id);
 create index if not exists booking_guests_hotel on booking_guests(hotel_id, mvd_status);
+-- Who changed what in a booking, with the old and new value.
+create table if not exists booking_events (
+  id integer primary key,
+  booking_id integer not null references bookings(id) on delete cascade,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  at text not null default (datetime('now')),
+  user_id integer,
+  user_name text not null default 'система',
+  what text not null,
+  old_value text not null default '',
+  new_value text not null default ''
+);
+create index if not exists booking_events_booking on booking_events(booking_id, id);
+-- Tags: a hotel's own labels for bookings ("VIP", "ранний заезд" ...).
+create table if not exists hotel_tags (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  name text not null,
+  color text not null default 'teal',
+  active integer not null default 1,
+  unique (hotel_id, name)
+);
+create table if not exists booking_tags (
+  booking_id integer not null references bookings(id) on delete cascade,
+  tag_id integer not null references hotel_tags(id) on delete cascade,
+  primary key (booking_id, tag_id)
+);
+-- Notes and tasks on a booking; due_at turns a note into a task with a deadline.
+create table if not exists booking_notes (
+  id integer primary key,
+  booking_id integer not null references bookings(id) on delete cascade,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  text text not null,
+  due_at text,
+  done integer not null default 0,
+  created_by text not null default '',
+  created_at text not null default (datetime('now'))
+);
+create index if not exists booking_notes_hotel on booking_notes(hotel_id, done, due_at);
 create table if not exists room_types (
   id integer primary key,
   hotel_id integer not null references hotels(id) on delete cascade,
@@ -280,6 +319,12 @@ const COLUMNS = {
     rounding: 'integer not null default 0',
     single_discount: 'integer not null default 0',
   },
+  payments: {
+    kind: "text not null default 'payment'",
+    voided: 'integer not null default 0',
+    void_reason: "text not null default ''",
+    ref_booking_id: 'integer',
+  },
   inventory: {
     cta: 'integer not null default 0',
     ctd: 'integer not null default 0',
@@ -295,6 +340,12 @@ const COLUMNS = {
     children_ages: "text not null default '[]'",
     checked_in_at: 'text',
     checked_out_at: 'text',
+    customer_name: "text not null default ''",
+    customer_phone: "text not null default ''",
+    customer_inn: "text not null default ''",
+    purpose: "text not null default ''",
+    arrival_time: "text not null default ''",
+    departure_time: "text not null default ''",
   },
 };
 

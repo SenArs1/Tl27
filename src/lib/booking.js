@@ -288,6 +288,12 @@ export function createBooking(db, hotel, input) {
       .run(id, hotel.id, room.id, physical ? physical.id : null, query.checkin, query.checkout);
     if (prepaid) db.prepare("insert into payments (booking_id, amount, method, note) values (?, ?, 'online', 'Предоплата при бронировании (тест)')").run(id, prepaid);
     logToChannels(db, hotel.id, 'booking', `Бронь ${code}: ${room.name}, ${query.checkin} – ${query.checkout}, наличие обновлено`, source);
+    // First line of the change history: who created the booking and from where.
+    const ch = db.prepare('select name from channels where hotel_id = ? and code = ?').get(hotel.id, source);
+    const staffName = createdBy ? (db.prepare('select name from users where id = ?').get(createdBy) || {}).name : null;
+    const author = staffName || (source === 'site' ? 'гость (сайт)' : ch ? `канал ${ch.name}` : 'система');
+    db.prepare('insert into booking_events (booking_id, hotel_id, user_id, user_name, what, new_value) values (?,?,?,?,?,?)')
+      .run(id, hotel.id, createdBy, author, 'Бронь создана', `${room.name}, ${query.checkin} — ${query.checkout}, ${total.toLocaleString('ru-RU')} ₽`);
     return db.prepare('select * from bookings where id = ?').get(id);
   });
 }
@@ -419,7 +425,7 @@ function repriceNights(db, hotel, b, start, end, typeId) {
 }
 
 // Writes a new accommodation price and recalculates tax and total.
-function updateMoney(db, hotel, b, stay, rate, ages, groups) {
+export function updateMoney(db, hotel, b, stay, rate, ages, groups) {
   const n = diffDays(b.checkin, b.checkout);
   const meals = priceStay({ nightly: Array(n).fill(0), rate: { ...rate, adjust_value: 0, discount_pct: 0, single_discount: 0 }, room: { capacity: 99, extra_beds: 99 }, adults: b.adults, children: b.children, ages, groups }).meals;
   const tax = taxFor(hotel, Math.max(0, stay - meals), n);
@@ -576,14 +582,19 @@ export function assignUnassigned(db, hotelId) {
   });
 }
 
-export function addPayment(db, booking, amount, method, note = '', userId = null) {
+export function addPayment(db, booking, amount, method, note = '', userId = null, kind = 'payment', refBookingId = null) {
   return tx(db, () => {
-    db.prepare('insert into payments (booking_id, amount, method, note, created_by) values (?,?,?,?,?)').run(booking.id, amount, method, note, userId);
-    const sum = db.prepare('select coalesce(sum(amount),0) s from payments where booking_id = ?').get(booking.id).s;
-    const total = db.prepare('select total from bookings where id = ?').get(booking.id).total;
-    db.prepare('update bookings set paid_amount = ?, paid = ? where id = ?').run(sum, sum >= total ? 1 : 0, booking.id);
-    return db.prepare('select * from bookings where id = ?').get(booking.id);
+    db.prepare('insert into payments (booking_id, amount, method, note, created_by, kind, ref_booking_id) values (?,?,?,?,?,?,?)').run(booking.id, amount, method, note, userId, kind, refBookingId);
+    return recalcPaid(db, booking.id);
   });
+}
+
+// Paid = payments minus refunds and transfers out, voided entries left out.
+export function recalcPaid(db, bookingId) {
+  const sum = db.prepare('select coalesce(sum(amount),0) s from payments where booking_id = ? and voided = 0').get(bookingId).s;
+  const total = db.prepare('select total from bookings where id = ?').get(bookingId).total;
+  db.prepare('update bookings set paid_amount = ?, paid = ? where id = ?').run(sum, sum >= total ? 1 : 0, bookingId);
+  return db.prepare('select * from bookings where id = ?').get(bookingId);
 }
 
 export function logToChannels(db, hotelId, kind, summary, exceptSource = null) {

@@ -277,7 +277,7 @@ fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
 .app-top h1 { font-size: 22px; margin: 0; }
 .app-user { margin-left: auto; color: var(--text-muted); font-size: 14px; }
 .app-content { padding: 24px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-content: start; }
-.app-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.app-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
 .tiles-stat { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .stat-tile { background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 18px; display: grid; gap: 4px; }
 .stat-tile span { color: var(--text-muted); font-size: 14px; }
@@ -343,7 +343,8 @@ fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
   .site-nav__end { margin: 12px 0 0; }
   .menu__panel { position: static; width: auto; box-shadow: none; border: 0; padding: 0 0 8px; }
   .menu__grid { grid-template-columns: 1fr; }
-  .hero__row, .split, .calc, .checkout, .app-cols { grid-template-columns: 1fr; }
+  .hero__row, .split, .calc, .checkout { grid-template-columns: 1fr; }
+  .app-cols { grid-template-columns: minmax(0, 1fr); }
   .hero-art { max-width: 420px; }
   .offer { grid-template-columns: 1fr; }
   .offer .room-img { min-height: 140px; }
@@ -549,3 +550,55 @@ tr.we { background: #fbf6ea; }
 .move-dialog p { margin: 4px 0; }
 .badge--confirmed { background: #e3f3ea; color: var(--success); }
 @media (max-width: 860px) { .chess-placement { margin-left: 0; } }
+
+/* ---------- v6: booking card, tags, notes ---------- */
+.tag { display: inline-block; padding: 1px 8px; border-radius: var(--r-pill); font-size: 12px; font-weight: 700; vertical-align: middle; color: #fff; }
+.tag--teal { background: #0f766e; }
+.tag--violet { background: #6b3fa0; }
+.tag--amber { background: #f2b33d; color: #1b1f1d; }
+.tag--rose { background: #b4235a; }
+.tag--blue { background: #1d4f91; }
+.tag--slate { background: #5f6b66; }
+.tags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.chip--teal input:checked + span, .chip--violet input:checked + span, .chip--amber input:checked + span,
+.chip--rose input:checked + span, .chip--blue input:checked + span, .chip--slate input:checked + span { border-color: transparent; }
+.chip--teal input:checked + span { background: #0f766e; }
+.chip--violet input:checked + span { background: #6b3fa0; }
+.chip--amber input:checked + span { background: #f2b33d; color: #1b1f1d; }
+.chip--rose input:checked + span { background: #b4235a; }
+.chip--blue input:checked + span { background: #1d4f91; }
+.chip--slate input:checked + span { background: #5f6b66; }
+.card-head { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; align-items: center; }
+.card-head h2 { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0; }
+.card-head p { margin: 4px 0 0; }
+.card-head .actions { grid-column: 1 / -1; }
+.card-head__money { display: grid; text-align: right; }
+.card-head__money .debt { color: var(--danger); font-size: 20px; }
+.card-head__money .paid { color: var(--success); font-size: 20px; }
+.card-tabs .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-size: 12px; }
+.card-tabs a[aria-current="page"] .count { background: var(--bg); color: var(--brand); }
+.pay-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6px; }
+.pay-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.pay-list li.is-void > span:first-child, .pay-list li.is-void strong { text-decoration: line-through; color: var(--text-muted); }
+.pay-list small { display: block; color: var(--danger); text-decoration: none; }
+.note-list { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 10px; }
+.note-list li { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; }
+.note-list p { margin: 0; }
+.note-list .is-done p { text-decoration: line-through; color: var(--text-muted); }
+.note-check { width: 26px; height: 26px; border-radius: 6px; border: 2px solid var(--border-input); background: var(--bg); cursor: pointer; font-weight: 800; color: var(--success); line-height: 1; }
+.is-done .note-check { border-color: var(--success); }
+.late { color: var(--danger); font-weight: 700; }
+.doc-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 10px; }
+.doc-list a { font-weight: 700; }
+.peek__notes { list-style: none; padding: 10px 12px; margin: 0 0 12px; background: #fff7e6; border-radius: var(--r-md); display: grid; gap: 6px; font-size: 14px; }
+.chess__tagmark { position: absolute; left: 0; top: 0; width: 0; height: 0; border-top: 12px solid currentColor; border-right: 12px solid transparent; background: none !important; color: #fff; }
+.chess__tagmark.tag--teal { color: #5eead4; }
+.chess__tagmark.tag--violet { color: #d8b4fe; }
+.chess__tagmark.tag--amber { color: #fde68a; }
+.chess__tagmark.tag--rose { color: #fda4af; }
+.chess__tagmark.tag--blue { color: #93c5fd; }
+.chess__tagmark.tag--slate { color: #e2e8f0; }
+@media (max-width: 560px) { .card-head { grid-template-columns: 1fr; } .card-head__money { text-align: left; } }
+
+.quote li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.pay-list li > span:first-child { min-width: 0; overflow-wrap: anywhere; }

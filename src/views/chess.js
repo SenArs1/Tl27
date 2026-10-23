@@ -19,7 +19,7 @@ export function isOverdue(b, today, nowTime, hotel) {
 
 // Tape chart: rows are physical rooms, columns are days split in halves so a stay
 // starts in the afternoon of check-in and ends in the morning of check-out.
-export function chessPage({ req, hotel, from, days, sort, typeFilter, types, rooms, bookings, free, today, nowTime, stats, msg, channels = [] }) {
+export function chessPage({ req, hotel, from, days, sort, typeFilter, types, rooms, bookings, free, today, nowTime, stats, msg, channels = [], tags = [] }) {
   const chName = new Map(channels.map((c) => [c.code, c.name]));
   const dates = Array.from({ length: days }, (_, i) => addDays(from, i));
   const cols = `var(--chess-label) repeat(${days * 2}, var(--chess-half))`;
@@ -52,15 +52,17 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
     const overdue = isOverdue(b, today, nowTime, hotel);
     const src = sourceKind(b.source);
     const part = b.is_first && b.is_last ? '' : `, часть ${fmtDate(b.start)} — ${fmtDate(b.end)}`;
-    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}${part}, ${STATUS[b.status] || b.status}, ${sourceShort(b.source, chName)}${debt > 0 ? `, к оплате ${rub(debt)}` : ''}${overdue ? (b.status === 'confirmed' ? ', заезд не оформлен' : ', выезд не оформлен') : ''}`;
+    const btags = b.tags || [];
+    const label = `${b.guest_name}, ${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}, ${nightsLabel(nights)}${part}, ${STATUS[b.status] || b.status}, ${sourceShort(b.source, chName)}${debt > 0 ? `, к оплате ${rub(debt)}` : ''}${overdue ? (b.status === 'confirmed' ? ', заезд не оформлен' : ', выезд не оформлен') : ''}${btags.length ? `, теги: ${btags.map((x) => x.name).join(', ')}` : ''}`;
     // Edges can be dragged to change dates: check-in only before arrival, check-out until departure.
     const left = b.is_first && b.status === 'confirmed' && s >= 0;
     const right = b.is_last && ['confirmed', 'checked_in'].includes(b.status) && e <= days;
     const movable = ['confirmed', 'checked_in'].includes(b.status);
     return html`<a class="chess__bar chess__bar--${b.status} src-${src} ${overdue ? 'is-overdue' : ''} ${s < 0 ? 'cut-l' : ''} ${e > days ? 'cut-r' : ''} ${b.is_first ? '' : 'cont-l'} ${b.is_last ? '' : 'cont-r'}" style="grid-column:${start} / ${end}"
       href="/app/bookings/${b.id}" draggable="${movable ? 'true' : 'false'}" data-booking="${b.id}" data-segment="${b.segment_id}" data-checkin="${b.checkin}" data-checkout="${b.checkout}"
-      data-status="${b.status}" data-src="${src}" data-pay="${payKind(b)}" data-whole="${b.is_first && b.is_last ? '1' : '0'}" data-find="${`${b.guest_name} ${b.code} ${b.guest_phone} ${b.channel_ref || ''}`.toLowerCase()}"
+      data-status="${b.status}" data-src="${src}" data-pay="${payKind(b)}" data-tag="${btags.map((x) => x.id).join(' ')}" data-whole="${b.is_first && b.is_last ? '1' : '0'}" data-find="${`${b.guest_name} ${b.code} ${b.guest_phone} ${b.channel_ref || ''}`.toLowerCase()}"
       title="${label}" aria-label="${label}">
+      ${btags.length ? html`<span class="chess__tagmark tag--${btags[0].color}" aria-hidden="true"></span>` : ''}
       ${left ? html`<span class="chess__handle chess__handle--l" data-edge="checkin" draggable="false" title="Потяните, чтобы изменить дату заезда"></span>` : ''}
       ${debt > 0 ? html`<span class="chess__debt" aria-hidden="true">₽</span>` : ''}<span class="chess__guest">${b.is_first ? '' : '→ '}${b.guest_name}</span><small>${b.adults + b.children} г. · ${sourceShort(b.source, chName)}</small>
       ${right ? html`<span class="chess__handle chess__handle--r" data-edge="checkout" draggable="false" title="Потяните, чтобы изменить дату выезда"></span>` : ''}</a>`;
@@ -121,6 +123,7 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
         <div><span>Свободно</span><strong>${st.free}</strong><small>номеров на ночь</small></div>
         <div class="${st.overdue ? 'is-alert' : ''}"><span>Не оформлено</span><strong>${st.overdue}</strong><small>заезды и выезды</small></div>
         <div><span>Номера</span><strong>${st.dirty}</strong><small>к уборке${st.repair ? `, ${st.repair} на ремонте` : ''}</small></div>
+        <div class="${st.tasks ? 'is-alert' : ''}"><span>Задачи</span><strong>${st.tasks || 0}</strong><small>на сегодня и просрочено</small></div>
       </div>
     </details>
     <form class="chess-toolbar card" method="get" action="/app/chess">
@@ -141,6 +144,7 @@ export function chessPage({ req, hotel, from, days, sort, typeFilter, types, roo
       <fieldset class="chips"><legend>Статус</legend>${chip('status', 'confirmed', 'ожидается')}${chip('status', 'checked_in', 'проживает')}${chip('status', 'checked_out', 'выехал')}</fieldset>
       <fieldset class="chips"><legend>Источник</legend>${chip('src', 'site', 'сайт')}${chip('src', 'manual', 'вручную')}${chip('src', 'channel', 'каналы')}</fieldset>
       <fieldset class="chips"><legend>Оплата</legend>${chip('pay', 'none', 'не оплачена')}${chip('pay', 'part', 'частично')}${chip('pay', 'paid', 'оплачена')}</fieldset>
+      ${tags.length ? html`<fieldset class="chips"><legend>Теги</legend>${tags.map((t) => chip('tag', String(t.id), t.name))}</fieldset>` : ''}
       <button type="button" class="btn btn--ghost btn--sm" data-filter-reset>Сбросить</button>
       <p class="muted chess-tools__count" aria-live="polite" data-filter-count></p>
     </div>
@@ -186,7 +190,7 @@ function sourceShort(s, names) {
 }
 
 // The side panel opened from a bar: the stay at a glance and the everyday actions.
-export function peekPanel({ req, b, segs, rate, channels, back, nowLocal }) {
+export function peekPanel({ req, b, segs, rate, channels, back, nowLocal, tags = [], notes = [] }) {
   const chName = new Map(channels.map((c) => [c.code, c.name]));
   const debt = b.total - b.paid_amount;
   const now = nowLocal; // the hotel's local date and time, editable in the form
@@ -210,8 +214,10 @@ export function peekPanel({ req, b, segs, rate, channels, back, nowLocal }) {
       <dt>Источник</dt><dd>${sourceShort(b.source, chName)}${b.channel_ref ? ` · ${b.channel_ref}` : ''}</dd>
       <dt>Тариф</dt><dd>${rate ? rate.name : '—'}</dd>
       <dt>Сумма</dt><dd>${rub(b.total)}${debt > 0 ? html` · <strong class="debt">к оплате ${rub(debt)}</strong>` : ' · оплачено'}</dd>
-      ${b.comment ? html`<dt>Заметка</dt><dd>${b.comment}</dd>` : ''}
+      ${b.comment ? html`<dt>Пожелания</dt><dd>${b.comment}</dd>` : ''}
+      ${tags.length ? html`<dt>Теги</dt><dd>${tags.map((t) => html`<span class="tag tag--${t.color}">${t.name}</span> `)}</dd>` : ''}
     </dl>
+    ${notes.length ? html`<ul class="peek__notes" aria-label="Открытые заметки">${notes.map((n) => html`<li>📝 ${n.text}${n.due_at ? html` <small class="muted">до ${n.due_at.slice(8, 10)}.${n.due_at.slice(5, 7)} ${n.due_at.slice(11, 16)}</small>` : ''}</li>`)}</ul>` : ''}
     <div class="peek__actions">
       ${b.status === 'confirmed' ? html`<form method="post" action="/app/bookings/${b.id}/status" class="peek__form">${hidden}<input type="hidden" name="status" value="checked_in">
           <label for="pk-in-${b.id}">Заселение</label><input id="pk-in-${b.id}" type="datetime-local" name="at" value="${now}">

@@ -105,7 +105,7 @@ test('HTTP: guests and MVD list — add, validate, mark, print, CSV; other hotel
     const rate = ctx.db.prepare("select * from rate_plans where name = 'Гибкий'").get();
     const b = createBooking(ctx.db, hotel, { query: { checkin: today(), checkout: stay(2).checkin, adults: 2, children: 1, ages: [8], promo: '' }, roomId: type.id, rateId: rate.id, guest: { ...guest, name: 'Петров Пётр' }, staff: true });
     // the card prefills the first guest from the booking name
-    const card = await (await fetch(`${ctx.base}/app/bookings/${b.id}`, { headers: { cookie: a.cookie } })).text();
+    const card = await (await fetch(`${ctx.base}/app/bookings/${b.id}?tab=guests`, { headers: { cookie: a.cookie } })).text();
     assert.match(card, /Гости и документы/);
     assert.match(card, /value="Петров"/);
     // invalid data: 422 with messages, nothing stored
@@ -118,7 +118,7 @@ test('HTTP: guests and MVD list — add, validate, mark, print, CSV; other hotel
     const guests = ctx.db.prepare('select * from booking_guests where booking_id = ?').all(b.id);
     assert.equal(guests.length, 2);
     // the card shows masked numbers only
-    const card2 = await (await fetch(`${ctx.base}/app/bookings/${b.id}`, { headers: { cookie: a.cookie } })).text();
+    const card2 = await (await fetch(`${ctx.base}/app/bookings/${b.id}?tab=guests`, { headers: { cookie: a.cookie } })).text();
     assert.doesNotMatch(card2, /654321/);
     assert.match(card2, /••••21/);
     // editing without a number keeps it

@@ -50,6 +50,7 @@ test('booking card: add guest documents, print card, mark sent in the MVD list',
   await page.getByRole('button', { name: 'Создать бронь' }).click();
   await expect(page.getByText(/создана/)).toBeVisible();
 
+  await page.getByRole('link', { name: /Гости и МВД/ }).click();
   await page.locator('#guests details.add summary').click();
   const f = page.locator('#guests details.add form');
   await expect(f.getByLabel('Фамилия')).toHaveValue('Смирнова');

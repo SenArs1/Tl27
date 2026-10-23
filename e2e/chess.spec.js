@@ -79,3 +79,59 @@ test('filters, search and collapsed categories', async ({ page, isMobile }) => {
   await page.getByRole('button', { name: 'Стандарт', exact: true }).click();
   await expect(page.locator('[data-room-number="201"]')).toBeVisible();
 });
+
+test('booking card: tabs, service, discount, refund, note, history, documents; tag on the chessboard', async ({ page, isMobile }) => {
+  await signIn(page);
+  const name = `Вкладкин ${isMobile ? 'М' : 'Д'}`;
+  await newBooking(page, { category: 'Стандарт (до 2)', from: day(isMobile ? 6 : 5), to: day(isMobile ? 8 : 7), name });
+  // details: tag VIP and a customer
+  await page.locator('label.chip', { hasText: 'VIP' }).click();
+  await page.getByRole('button', { name: 'Сохранить теги' }).click();
+  await expect(page.getByText('Теги сохранены')).toBeVisible();
+  await page.getByLabel('Заказчик (если платит не гость)').fill('ООО «Пример»');
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(page.getByText('Сохранено', { exact: true })).toBeVisible();
+  await axe(page);
+  // stay: service and discount
+  await page.getByRole('link', { name: 'Проживание и услуги' }).click();
+  await page.getByLabel('Своя услуга: название').fill('Мини-бар');
+  await page.getByLabel('Своя услуга: цена, ₽').fill('450');
+  await page.getByRole('button', { name: 'Добавить услугу' }).click();
+  await expect(page.getByText('Мини-бар × 1')).toBeVisible();
+  const disc = page.locator('details.add', { has: page.locator('summary', { hasText: 'Скидка' }) });
+  await disc.locator('summary').click();
+  await disc.getByLabel('Размер').fill('10');
+  await disc.getByLabel('Причина').fill('постоянный гость');
+  await disc.getByRole('button', { name: 'Применить' }).click();
+  await expect(page.getByText('Скидка применена')).toBeVisible();
+  await axe(page);
+  // payments: pay, then refund part
+  await page.getByRole('link', { name: 'Счёт и платежи' }).click();
+  await page.getByRole('button', { name: 'Принять оплату' }).click();
+  const ref = page.locator('details.add', { has: page.locator('summary', { hasText: 'Возврат' }) });
+  await ref.locator('summary').click();
+  await ref.getByLabel('Сумма возврата, ₽').fill('300');
+  await ref.getByLabel('Причина').fill('мини-бар не использовался');
+  await page.getByRole('button', { name: 'Оформить возврат' }).click();
+  await expect(page.getByText('Возврат оформлен')).toBeVisible();
+  await axe(page);
+  // notes and history
+  await page.getByRole('link', { name: 'Заметки' }).click();
+  await page.getByLabel('Заметка').fill('Поставить фрукты в номер');
+  await page.getByRole('button', { name: 'Добавить' }).click();
+  await page.getByRole('link', { name: 'История' }).click();
+  for (const w of ['Бронь создана', 'Теги', 'Заказчик', 'Добавлена услуга', 'Скидка 10%', 'Возврат', 'Заметка']) {
+    await expect(page.getByRole('cell', { name: new RegExp(`^${w}`) }).first()).toBeVisible();
+  }
+  await axe(page);
+  // documents open in a new tab
+  await page.getByRole('link', { name: 'Документы' }).click();
+  const [doc] = await Promise.all([page.waitForEvent('popup'), page.getByRole('link', { name: 'Счёт на оплату' }).click()]);
+  await expect(doc.getByText('ООО «Пример»')).toBeVisible();
+  await doc.close();
+  // on the chessboard the VIP filter keeps this booking visible
+  await page.goto('/app/chess?days=14&sort=category');
+  await page.locator('label.chip', { hasText: 'VIP' }).click();
+  await expect(page.locator('.chess__bar', { hasText: name })).not.toHaveClass(/is-dim/);
+  await expect(page.locator('.chess__bar', { hasText: name }).locator('.chess__tagmark')).toHaveCount(1);
+});

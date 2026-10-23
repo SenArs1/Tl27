@@ -67,6 +67,8 @@ export function seed(db, now = new Date()) {
     insCp.run(r.id, gTeen, 1000);
   }
   db.prepare('insert into promo_codes (hotel_id, code, discount_pct) values (?,?,?)').run(hotelId, 'ONEGO10', 10);
+  const insTag = db.prepare('insert into hotel_tags (hotel_id, name, color) values (?,?,?)');
+  [['VIP', 'violet'], ['Постоянный гость', 'teal'], ['Ранний заезд', 'amber'], ['С животным', 'rose']].forEach(([n, c]) => insTag.run(hotelId, n, c));
   db.prepare("update channels set connected = 1 where hotel_id = ? and code in ('tripgo','nochleg')").run(hotelId);
 
   // 120 days of inventory: weekends cost 15% more.

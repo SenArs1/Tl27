@@ -1,10 +1,10 @@
-## Parity: 95.6 / 100
+## Parity: 95.9 / 100
 
-features 95.6  (67 counted, must-haves 32 of 32 done)
+features 95.9  (74 counted, must-haves 33 of 33 done)
 
 ## By area, weakest first
 - settings                      85.7  (3 features)
-- extranet                      93.0  (30 features)
+- extranet                      94.0  (37 features)
 - reports                       95.0  (5 features)
 - booking engine                98.2  (11 features)
 - marketing                    100.0  (8 features)
@@ -15,9 +15,10 @@ features 95.6  (67 counted, must-haves 32 of 32 done)
 - platform                     100.0  (3 features)
 
 ## Missing, in build order
-- [should] extranet: Booking change history, no  (next)
-- [should] extranet: Booking tags and notes with due dates, no  (next, with the booking card)
+- [should] extranet: Group bookings, no  (separate project)
 - [could] extranet: Hourly bookings, no  (separate mode)
+- [could] extranet: Security deposit, no
+- [could] extranet: Several invoices per booking for different payers, no
 - [could] settings: Housekeeping and investor roles, no  (next)
 - [could] booking engine: Loyalty program, partial  (only described on the product page; no member accounts)
 - [could] reports: MVD guest list and e-registration, partial  (guest documents, registration card, MVD list with deadlines/status, CSV; sending to MVD is manual (no government API connection))

@@ -102,3 +102,17 @@ Bugs found in v5 and fixed:
 | B16 | — | during development: a batch edit of `db.js` broke the file (insertion with an empty pattern) | caught by tests at once, file restored from git, edit re-applied |
 
 Tests: 48 unit/HTTP (+7: move with preview, price recalculation, in-house move, placement mode, overdue, panel/actions/isolation), 41 e2e + 3 deliberate skips.
+
+## Version 6 (booking card, 2026-10-23)
+
+Comparison: `card-gap.md`. Tabs, history, tags, notes/tasks, price and discount,
+services, refund/voiding/transfer, documents, journal CSV export.
+
+Bugs found by tests in v6 and fixed:
+
+| id | sev | what | fix |
+| --- | --- | --- | --- |
+| B17 | S3 | the counter on the active tab failed the contrast check | white background, brand-colour text |
+| B18 | S2 | on a phone the two-column card blocks (payments) widened the page to 474px, buttons were unreachable | `minmax(0, 1fr)` for `.app-cols`, line wrapping |
+
+Tests: 54 unit/HTTP (+6: history, refund/voiding, transfer, price/discount/services, tags, card HTTP and isolation), 43 e2e + 3 deliberate skips.
