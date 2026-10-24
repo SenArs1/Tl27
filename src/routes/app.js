@@ -17,6 +17,8 @@ import { bookingCard, TABS } from '../views/card.js';
 import { confirmationDoc, invoiceDoc, receiptDoc, groupInvoiceDoc } from '../views/docs.js';
 import { groupsPage, groupPage } from '../views/groups.js';
 import { hourlyPage } from '../views/hourly.js';
+import * as L from '../views/loyalty.js';
+import { levelsOf, levelFor, ensureLevels, memberStatus, memberById, validateMember, enroll, historyOfMember, adjust, removeMember, linkBooking, unlinkBooking, redeem, redeemLimit, pointsUsedOn, earnOnCheckout, revertEarn } from '../lib/loyalty.js';
 import { validateGroup, createGroup, groupMembers, groupTotals, listGroups, payGroup, cancelGroup, attachBooking, detachBooking } from '../lib/groups.js';
 import { toMin, parseHourly, createHourly, changeTime, dayBoard } from '../lib/hourly.js';
 import { invoicesOf, findInvoice, createInvoice, deleteInvoice } from '../lib/invoices.js';
@@ -152,6 +154,102 @@ export function appRouter(db, { showDemo }) {
   });
 
   // ---------- housekeeping ----------
+  // ---------- loyalty program ----------
+  const withLevel = (hid, list) => { const lv = levelsOf(db, hid); return list.map((m) => ({ ...m, ...levelFor(lv, m.spent) })); };
+  r.get('/loyalty', (req, res) => {
+    const hid = req.user.hotel_id;
+    const q = str(req.query.q, 80);
+    const like = `%${q.toLowerCase()}%`;
+    const members = db.prepare(`select * from loyalty_members where hotel_id = ? ${q ? 'and (lower(name) like ? or email like ? or phone like ? or card_no like ?)' : ''} order by id desc limit 200`)
+      .all(hid, ...(q ? [like, like, `%${q}%`, `%${q.replace(/\D/g, '') || q}%`] : []));
+    const totals = {
+      members: db.prepare('select count(*) n from loyalty_members where hotel_id = ?').get(hid).n,
+      points: db.prepare('select coalesce(sum(points),0) n from loyalty_members where hotel_id = ?').get(hid).n,
+      bookings30: db.prepare("select count(*) n from bookings where hotel_id = ? and member_id is not null and created_at >= datetime('now','-30 days')").get(hid).n,
+    };
+    res.send(L.membersPage({ req, hotel: req.hotelRow, msg: req.msg, members: withLevel(hid, members), q, totals }));
+  });
+  r.post('/loyalty', (req, res) => {
+    const { m, errors } = validateMember(req.body);
+    if (Object.keys(errors).length) return back(res, '/app/loyalty', Object.values(errors).join('. '), true);
+    try {
+      const member = enroll(db, req.hotelRow, m, req.user);
+      back(res, `/app/loyalty/${member.id}`, `${member.name} в программе, номер карты ${member.card_no}`);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      back(res, '/app/loyalty', e.message, true);
+    }
+  });
+  r.get('/loyalty/settings', (req, res) => res.send(L.loyaltySettingsPage({ req, hotel: req.hotelRow, msg: req.msg, levels: levelsOf(db, req.user.hotel_id) })));
+  r.post('/loyalty/settings', requireOwner, (req, res) => {
+    const b = req.body;
+    const name = str(b.loyalty_name, 60);
+    if (name.length < 2) return back(res, '/app/loyalty/settings', 'Назовите программу', true);
+    const on = b.loyalty_on === 'on' ? 1 : 0;
+    db.prepare('update hotels set loyalty_on = ?, loyalty_name = ?, loyalty_welcome = ?, loyalty_redeem_pct = ? where id = ?')
+      .run(on, name, Math.min(100000, Math.max(0, int(b.loyalty_welcome))), Math.min(100, Math.max(0, int(b.loyalty_redeem_pct, 30))), req.user.hotel_id);
+    if (on) ensureLevels(db, req.user.hotel_id);
+    back(res, '/app/loyalty/settings', on ? 'Сохранено. Программа работает' : 'Сохранено. Программа выключена');
+  });
+  const levelInput = (b) => {
+    const l = { name: str(b.name, 40), min_spent: Math.max(0, int(b.min_spent)), discount_pct: int(b.discount_pct), earn_pct: int(b.earn_pct) };
+    if (l.name.length < 2) return [l, 'Назовите уровень'];
+    if (l.discount_pct < 0 || l.discount_pct > 50 || l.earn_pct < 0 || l.earn_pct > 50) return [l, 'Скидка и начисление — от 0 до 50%'];
+    return [l, null];
+  };
+  r.post('/loyalty/levels', requireOwner, (req, res) => {
+    const [l, err] = levelInput(req.body);
+    if (err) return back(res, '/app/loyalty/settings', err, true);
+    db.prepare('insert into loyalty_levels (hotel_id, name, min_spent, discount_pct, earn_pct) values (?,?,?,?,?)').run(req.user.hotel_id, l.name, l.min_spent, l.discount_pct, l.earn_pct);
+    back(res, '/app/loyalty/settings', `Уровень «${l.name}» добавлен`);
+  });
+  r.post('/loyalty/levels/:id', requireOwner, (req, res, next) => {
+    const old = db.prepare('select * from loyalty_levels where id = ? and hotel_id = ?').get(int(req.params.id), req.user.hotel_id);
+    if (!old) return next();
+    const [l, err] = levelInput(req.body);
+    if (err) return back(res, '/app/loyalty/settings', err, true);
+    db.prepare('update loyalty_levels set name = ?, min_spent = ?, discount_pct = ?, earn_pct = ? where id = ?').run(l.name, l.min_spent, l.discount_pct, l.earn_pct, old.id);
+    back(res, '/app/loyalty/settings', 'Сохранено');
+  });
+  r.post('/loyalty/levels/:id/delete', requireOwner, (req, res, next) => {
+    const del = db.prepare('delete from loyalty_levels where id = ? and hotel_id = ?').run(int(req.params.id), req.user.hotel_id);
+    if (!del.changes) return next();
+    back(res, '/app/loyalty/settings', 'Уровень удалён');
+  });
+  const ownMember = (req) => memberById(db, req.user.hotel_id, req.params.mid);
+  r.get('/loyalty/:mid', (req, res, next) => {
+    const m = ownMember(req);
+    if (!m) return next();
+    res.send(L.memberPage({ req, hotel: req.hotelRow, msg: req.msg, m: memberStatus(db, m), history: historyOfMember(db, m.id),
+      bookings: db.prepare('select * from bookings where member_id = ? order by checkin desc').all(m.id) }));
+  });
+  r.post('/loyalty/:mid', (req, res, next) => {
+    const m = ownMember(req);
+    if (!m) return next();
+    const { m: v, errors } = validateMember(req.body);
+    if (Object.keys(errors).length) return back(res, `/app/loyalty/${m.id}`, Object.values(errors).join('. '), true);
+    if (db.prepare('select 1 from loyalty_members where hotel_id = ? and email = ? and id != ?').get(m.hotel_id, v.email, m.id)) return back(res, `/app/loyalty/${m.id}`, 'Эта почта уже у другого участника', true);
+    db.prepare('update loyalty_members set name = ?, email = ?, phone = ? where id = ?').run(v.name, v.email, v.phone, m.id);
+    back(res, `/app/loyalty/${m.id}`, 'Сохранено');
+  });
+  r.post('/loyalty/:mid/adjust', (req, res, next) => {
+    const m = ownMember(req);
+    if (!m) return next();
+    try {
+      const after = adjust(db, m, int(String(req.body.points).replace('−', '-'), 0), str(req.body.reason, 200), req.user);
+      back(res, `/app/loyalty/${m.id}`, `Готово. На счёте ${after.points.toLocaleString('ru-RU')} баллов`);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      back(res, `/app/loyalty/${m.id}`, e.message, true);
+    }
+  });
+  r.post('/loyalty/:mid/delete', (req, res, next) => {
+    const m = ownMember(req);
+    if (!m) return next();
+    removeMember(db, m);
+    back(res, '/app/loyalty', `${m.name}: участие в программе прекращено, данные удалены`);
+  });
+
   // ---------- hourly bookings ----------
   const hourlyView = (req, date, extra = {}) => hourlyPage({
     req, hotel: req.hotelRow, msg: req.msg, date, today: req.today, board: dayBoard(db, req.user.hotel_id, date),
@@ -465,6 +563,7 @@ export function appRouter(db, { showDemo }) {
     const amount = int(req.body.pay_amount);
     const method = ['cash', 'card', 'transfer'].includes(req.body.pay_method) ? req.body.pay_method : 'card';
     if (amount < 0 || amount > b.total - b.paid_amount) return back(res, ret, 'Сумма оплаты больше долга по брони', true);
+    let earned = 0;
     tracked(db, b.id, req.user, undo ? 'Отмена выселения' : '', () => tx(db, () => {
       if (to === 'cancelled') cancelBooking(db, b);
       else if (to === 'no_show') markNoShow(db, b);
@@ -472,12 +571,14 @@ export function appRouter(db, { showDemo }) {
         const last = segs[segs.length - 1];
         if (to === 'checked_in' && !undo) db.prepare('update bookings set status = ?, checked_in_at = ? where id = ?').run(to, stamp(req.body.at), b.id);
         if (undo) {
+          revertEarn(db, b, req.user);
           db.prepare("update bookings set status = 'checked_in', checked_out_at = null, comment = trim(comment || char(10) || ?) where id = ?").run(`Отмена выселения: ${reason}`, b.id);
           if (last && last.room_id) db.prepare("update rooms set status = 'clean' where id = ? and status = 'dirty'").run(last.room_id);
         }
         if (to === 'checked_out') {
           db.prepare('update bookings set status = ?, checked_out_at = ? where id = ?').run(to, stamp(req.body.at), b.id);
           if (last && last.room_id) db.prepare("update rooms set status = 'dirty' where id = ?").run(last.room_id);
+          earned = earnOnCheckout(db, req.hotelRow, b, req.user);
         }
       }
       if (amount > 0 && ['checked_in', 'checked_out'].includes(to)) addPayment(db, b, amount, method, to === 'checked_in' ? 'При заселении' : 'При выезде', req.user.id);
@@ -485,7 +586,7 @@ export function appRouter(db, { showDemo }) {
     const docs = db.prepare('select count(*) n from booking_guests where booking_id = ?').get(b.id).n;
     const docsNote = to === 'checked_in' && !undo && docs < b.adults + b.children ? '. Внесите документы гостей для МВД' : '';
     const text = undo ? `Выселение отменено: ${b.guest_name} снова проживает`
-      : { checked_in: `${b.guest_name} заселён${amount ? `, оплата ${amount.toLocaleString('ru-RU')} ₽ принята` : ''}${docsNote}`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке${depositBalance(db, b.id) > 0 ? `. Не забудьте залог: ${depositBalance(db, b.id).toLocaleString('ru-RU')} ₽ — верните или удержите` : ''}`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to];
+      : { checked_in: `${b.guest_name} заселён${amount ? `, оплата ${amount.toLocaleString('ru-RU')} ₽ принята` : ''}${docsNote}`, checked_out: `${b.guest_name} выселен, номер отмечен к уборке${earned > 0 ? `. Начислено ${earned.toLocaleString('ru-RU')} баллов` : ''}${depositBalance(db, b.id) > 0 ? `. Не забудьте залог: ${depositBalance(db, b.id).toLocaleString('ru-RU')} ₽ — верните или удержите` : ''}`, cancelled: 'Бронь отменена', no_show: 'Отмечен незаезд' }[to];
     back(res, ret + (docsNote && ret.startsWith('/app/bookings/') ? '#guests' : ''), text);
   });
   // Shared reply for the chessboard (JSON) and the booking card (form + redirect).
@@ -582,6 +683,13 @@ export function appRouter(db, { showDemo }) {
       payments: db.prepare('select * from payments where booking_id = ? order by id').all(b.id),
       extrasCatalog: db.prepare('select e.*, g.name as group_name from extras e left join extra_groups g on g.id = e.group_id where e.hotel_id = ? and e.active = 1 order by g.sort, e.name').all(req.user.hotel_id),
       notes: notesOf(db, b.id), history: historyOf(db, b.id), guestList, guestCount: guestList.length, deposit: depositBalance(db, b.id), invoices: invoicesOf(db, b),
+      loyalty: tab === 'details' ? (() => {
+        const member = b.member_id ? memberById(db, b.hotel_id, b.member_id) : null;
+        const ms = member ? memberStatus(db, member) : null;
+        const used = pointsUsedOn(db, b.id);
+        return L.cardLoyaltyBlock({ req, hotel: req.hotelRow, b, member: ms, used, here: `/app/bookings/${b.id}?tab=details`,
+          limit: ms && req.hotelRow.loyalty_on ? redeemLimit(req.hotelRow, ms, b, used) : 0 });
+      })() : '',
       hourRooms: b.start_at ? db.prepare('select * from rooms where room_type_id = ? and active = 1 order by sort, number').all(b.room_type_id) : [],
       group: b.group_id ? db.prepare('select * from booking_groups where id = ? and hotel_id = ?').get(b.group_id, b.hotel_id) : null,
       guests: tab === 'guests' ? guestsBlock(req, b, extra) : '',
@@ -725,6 +833,40 @@ export function appRouter(db, { showDemo }) {
     if (!target) throw new BookingError('target', 'Бронь с таким номером не найдена в этом объекте');
     transferPayment(db, b, target, int(req.body.amount), req.user);
     back(res, ret, `Оплата перенесена в бронь ${target.code}`);
+  });
+  cardAction('loyalty', (req, res, b, ret) => {
+    const op = req.body.op;
+    const member = b.member_id ? memberById(db, b.hotel_id, b.member_id) : null;
+    if (op === 'link') {
+      const f = str(req.body.find, 120);
+      const digits = f.replace(/\D/g, '');
+      const found = db.prepare(`select * from loyalty_members where hotel_id = ? and (card_no = ? or email = ? or (? != '' and replace(replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', '') like ?))`)
+        .all(b.hotel_id, digits, f.toLowerCase(), digits.length >= 10 ? digits : '', `%${digits.slice(-10)}`);
+      if (found.length !== 1) throw new BookingError('member', found.length ? 'Нашлось несколько участников — укажите номер карты' : 'Участник не найден');
+      linkBooking(db, b, found[0], req.user);
+      return back(res, ret, `Бронь привязана к участнику ${found[0].name}`);
+    }
+    if (op === 'enroll') {
+      const { m, errors } = validateMember({ name: b.guest_name, email: b.guest_email, phone: b.guest_phone });
+      if (Object.keys(errors).length) throw new BookingError('member', Object.values(errors).join('. '));
+      const created = enroll(db, req.hotelRow, m, req.user);
+      linkBooking(db, b, created, req.user);
+      return back(res, ret, `${created.name} в программе, номер карты ${created.card_no} — сообщите его гостю`);
+    }
+    if (!member) throw new BookingError('member', 'Бронь не привязана к участнику');
+    if (op === 'unlink') { unlinkBooking(db, b, req.user); return back(res, ret, 'Участник отвязан'); }
+    if (op === 'redeem') { redeem(db, req.hotelRow, b, member, int(req.body.points), req.user); return back(res, ret, 'Баллы списаны в оплату брони'); }
+    if (op === 'discount') {
+      const { level } = memberStatus(db, member);
+      if (!level.discount_pct) throw new BookingError('member', 'На уровне участника скидки нет');
+      if (b.loyalty_discount) throw new BookingError('member', 'Скидка уровня уже применена');
+      const before = b.nights_total;
+      tracked(db, b.id, req.user, '', () => applyDiscount(db, req.hotelRow, b, { pct: level.discount_pct }, `уровень «${level.name}»`, req.user));
+      const d = before - db.prepare('select nights_total from bookings where id = ?').get(b.id).nights_total;
+      db.prepare('update bookings set loyalty_discount = ? where id = ?').run(d, b.id);
+      return back(res, ret, `Скидка ${level.discount_pct}% применена`);
+    }
+    throw new BookingError('op', 'Неизвестное действие');
   });
   cardAction('time', (req, res, b, ret) => {
     const p = parseHourly(req.body, req.hotelRow, { staff: true });

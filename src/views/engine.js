@@ -29,7 +29,7 @@ export function searchForm(hotel, query, errors = {}) {
   </form>`;
 }
 
-export function hotelPage(hotel, rooms, query, errors, hourly = { types: [], q: {} }) {
+export function hotelPage(hotel, rooms, query, errors, hourly = { types: [], q: {} }, levels = []) {
   return engineLayout({
     title: 'Бронирование',
     hotel,
@@ -43,7 +43,8 @@ export function hotelPage(hotel, rooms, query, errors, hourly = { types: [], q: 
       ${rooms.length || hourly.types.length ? '' : html`<div class="card empty"><p>Отель ещё не открыл онлайн-продажи. Позвоните нам: ${hotel.phone || 'телефон уточняется'}</p></div>`}
       <div class="cards cards--2">${rooms.map((r) => html`<article class="card room-mini"><div class="room-img room-img--${r.image}" role="img" aria-label="Иллюстрация номера"></div><div><h3>${r.name}</h3><p class="muted">${r.area_m2} м² · ${capacityText(r)}</p><p>от ${rub(r.base_price)} за ночь</p></div></article>`)}</div>
     </section>
-    ${hourlySection(hotel, hourly.types, hourly.q)}`,
+    ${hourlySection(hotel, hourly.types, hourly.q)}
+    ${loyaltySection(hotel, levels)}`,
   });
 }
 
@@ -108,6 +109,11 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
           ${groupExtras(extras).map(([group, list]) => html`${group ? html`<p class="extras__group">${group}</p>` : ''}${list.map((e) => html`<label class="check extra"><input type="checkbox" name="extras" value="${e.id}" data-price="${e.price}" data-per="${e.per}" ${chosen.includes(e.id) ? raw('checked') : ''}>
             <span><strong>${e.name}</strong> — ${rub(e.price)} ${e.per === 'stay' ? 'за всё' : e.per === 'night' ? 'за ночь' : 'за гостя в ночь'}<small class="muted">${e.description}</small></span></label>`)}`)}
         </fieldset>` : ''}
+        ${hotel.loyalty_on ? html`<fieldset class="loyalty-box"><legend class="h3">Участник программы «${hotel.loyalty_name}»?</legend>
+          <p class="muted">Укажите номер карты — скидка вашего уровня применится к проживанию, а баллами можно оплатить до ${hotel.loyalty_redeem_pct}% брони. Почта должна совпадать с почтой участника. Нет карты? <a href="/h/${hotel.slug}#loyalty">Вступить в программу</a></p>
+          ${field({ name: 'card_no', label: 'Номер карты (необязательно)', value: values.card_no, error: errors.card_no, attrs: 'inputmode="numeric" autocomplete="off" maxlength="12"' })}
+          ${field({ name: 'points', label: 'Оплатить баллами (необязательно)', type: 'number', value: values.points, error: errors.points, attrs: 'min="0" inputmode="numeric"' })}
+        </fieldset>` : ''}
         <fieldset><legend class="h3">Оплата</legend>
           ${hotel.pay_at_hotel ? html`<label class="check"><input type="radio" name="payment" value="hotel" ${values.payment !== 'card' ? raw('checked') : ''}><span>При заселении</span></label>` : ''}
           ${hotel.pay_card ? html`<label class="check"><input type="radio" name="payment" value="card" ${values.payment === 'card' || !hotel.pay_at_hotel ? raw('checked') : ''}><span>Картой сейчас${hotel.prepay_pct && hotel.prepay_pct < 100 ? ` — предоплата ${hotel.prepay_pct}%` : ''} <small class="muted">(тестовый режим, деньги не списываются)</small></span></label>` : ''}
@@ -137,8 +143,10 @@ export function checkoutPage(hotel, { query, room, rate, price, extras, chosen =
   });
 }
 
-export function confirmationPage(hotel, b, room, rate, { justBooked = false, error } = {}) {
+export function confirmationPage(hotel, b, room, rate, { justBooked = false, error, pointsPaid = 0, note } = {}) {
   const extras = JSON.parse(b.extras || '[]');
+  const card = b.paid_amount - pointsPaid;
+  const payParts = [card > 0 ? `${rub(card)} картой (тест)` : '', pointsPaid > 0 ? `${rub(pointsPaid)} баллами «${hotel.loyalty_name}»` : ''].filter(Boolean);
   return engineLayout({
     title: `Бронь ${b.code}`,
     hotel,
@@ -149,6 +157,7 @@ export function confirmationPage(hotel, b, room, rate, { justBooked = false, err
         : html`<span class="card__icon card__icon--ok">${icon('check', 28)}</span><h1 class="h2">${justBooked ? 'Номер забронирован' : 'Ваше бронирование'}</h1>`}
       <p class="confirm__code">Номер брони: <strong data-code>${b.code}</strong> ${statusBadge(b.status)}</p>
       ${error ? html`<p class="flash flash--error" role="alert">${error}</p>` : ''}
+      ${note ? html`<p class="flash flash--success" role="status">${note}</p>` : ''}
       <dl class="kv">
         <dt>Гость</dt><dd>${b.guest_name}</dd>
         <dt>Номер</dt><dd>${room.name}</dd>
@@ -159,7 +168,8 @@ export function confirmationPage(hotel, b, room, rate, { justBooked = false, err
         ${extras.length ? html`<dt>Допуслуги</dt><dd>${extras.map((e) => `${e.name} × ${e.qty}`).join(', ')}</dd>` : ''}
         <dt>Сумма</dt><dd><strong>${rub(b.total)}</strong>${b.discount_total ? html` <span class="muted">(скидка ${rub(b.discount_total)})</span>` : ''}</dd>
         ${b.tax_total ? html`<dt>в т.ч. тур. налог</dt><dd>${rub(b.tax_total)}</dd>` : ''}
-        <dt>Оплата</dt><dd>${b.paid_amount ? `Оплачено ${rub(b.paid_amount)} картой (тест)${b.paid_amount < b.total ? `, остаток ${rub(b.total - b.paid_amount)} при заселении` : ''}` : 'При заселении'}</dd>
+        ${b.loyalty_discount ? html`<dt>Скидка участника</dt><dd>${rub(b.loyalty_discount)}</dd>` : ''}
+        <dt>Оплата</dt><dd>${b.paid_amount ? `Оплачено ${payParts.join(' и ')}${b.paid_amount < b.total ? `, остаток ${rub(b.total - b.paid_amount)} при заселении` : ''}` : 'При заселении'}</dd>
       </dl>
       ${b.status === 'confirmed' ? html`<form method="post" action="/h/${hotel.slug}/booking/${b.code}/cancel" data-confirm="${rate.refundable ? 'Отменить бронь?' : 'Тариф невозвратный: оплата не вернётся. Всё равно отменить?'}">
         <input type="hidden" name="email" value="${b.guest_email}">
@@ -280,6 +290,79 @@ export function hourlyCheckoutPage(hotel, { q, type, price, tax, values = {}, er
         <ul class="quote"><li><span>${q.hours} ч × ${rub(type.hour_price)}</span><span>${rub(price)}</span></li>${tax ? html`<li><span>Туристический налог</span><span>${rub(tax)}</span></li>` : ''}</ul>
         <p class="quote__total"><span>Итого</span><strong>${rub(price + tax)}</strong></p>
       </aside>
+    </div>`,
+  });
+}
+
+// ---------- loyalty program on the hotel site ----------
+export function loyaltySection(hotel, levels) {
+  if (!hotel.loyalty_on) return '';
+  return html`<section class="section-sm" id="loyalty"><h2>Программа «${hotel.loyalty_name}»</h2>
+    <p>Бронируйте напрямую на этом сайте и копите баллы: они начисляются после выезда, 1 балл = 1 ₽. Баллами можно оплатить до ${hotel.loyalty_redeem_pct}% следующей брони.${hotel.loyalty_welcome ? ` За вступление — ${hotel.loyalty_welcome.toLocaleString('ru-RU')} баллов.` : ''}</p>
+    ${levels.length ? html`<div class="table-wrap" tabindex="0" role="region" aria-label="Уровни программы"><table class="table table--compact">
+      <thead><tr><th scope="col">Уровень</th><th scope="col">Когда</th><th scope="col">Скидка на проживание</th><th scope="col">Баллы с проживания</th></tr></thead>
+      <tbody>${levels.map((l) => html`<tr><td>${l.name}</td><td>${l.min_spent ? `от ${rub(l.min_spent)} за проживания` : 'сразу'}</td><td>${l.discount_pct ? `${l.discount_pct}%` : '—'}</td><td>${l.earn_pct}%</td></tr>`)}</tbody></table></div>` : ''}
+    <div class="cards cards--2">
+      <form class="card form" method="post" action="/h/${hotel.slug}/loyalty/join" novalidate><h3>Вступить</h3>
+        ${field({ prefix: 'lj', name: 'name', label: 'Имя и фамилия', attrs: 'required autocomplete="name"' })}
+        ${field({ prefix: 'lj', name: 'email', label: 'Почта', type: 'email', attrs: 'required autocomplete="email"' })}
+        ${field({ prefix: 'lj', name: 'phone', label: 'Телефон (необязательно)', type: 'tel', attrs: 'autocomplete="tel"' })}
+        <label class="check"><input type="checkbox" name="agree" required><span>Согласен с условиями программы и обработкой персональных данных</span></label>
+        <button class="btn btn--primary" type="submit">Получить карту</button></form>
+      <form class="card form" method="post" action="/h/${hotel.slug}/loyalty/login" novalidate><h3>Уже участник</h3>
+        ${field({ prefix: 'll', name: 'card_no', label: 'Номер карты', attrs: 'required inputmode="numeric" autocomplete="off"' })}
+        ${field({ prefix: 'll', name: 'email', label: 'Почта', type: 'email', attrs: 'required autocomplete="email"' })}
+        <button class="btn btn--secondary" type="submit">Открыть кабинет</button></form>
+    </div></section>`;
+}
+
+const TX = { welcome: 'Приветственные баллы', earn: 'Начислено за проживание', redeem: 'Оплата брони', return: 'Возврат баллов', revert: 'Отмена начисления', adjust: 'Корректировка' };
+
+export function loyaltyFormPage(hotel, { title, error, values = {}, join = false }) {
+  return engineLayout({
+    title,
+    hotel,
+    body: html`<div class="container--narrow"><h1 class="h2">${title}</h1>
+      ${error ? html`<p class="flash flash--error" role="alert">${error}</p>` : ''}
+      ${join ? html`<form class="card form" method="post" action="/h/${hotel.slug}/loyalty/join" novalidate>
+        ${field({ prefix: 'lj', name: 'name', label: 'Имя и фамилия', value: values.name, attrs: 'required autocomplete="name"' })}
+        ${field({ prefix: 'lj', name: 'email', label: 'Почта', type: 'email', value: values.email, attrs: 'required autocomplete="email"' })}
+        ${field({ prefix: 'lj', name: 'phone', label: 'Телефон (необязательно)', type: 'tel', value: values.phone, attrs: 'autocomplete="tel"' })}
+        <label class="check"><input type="checkbox" name="agree" ${values.agree ? raw('checked') : ''} required><span>Согласен с условиями программы и обработкой персональных данных</span></label>
+        <button class="btn btn--primary btn--block" type="submit">Получить карту</button></form>`
+      : html`<form class="card form" method="post" action="/h/${hotel.slug}/loyalty/login" novalidate>
+        ${field({ prefix: 'll', name: 'card_no', label: 'Номер карты', value: values.card_no, attrs: 'required inputmode="numeric" autocomplete="off"' })}
+        ${field({ prefix: 'll', name: 'email', label: 'Почта', type: 'email', value: values.email, attrs: 'required autocomplete="email"' })}
+        <button class="btn btn--primary btn--block" type="submit">Открыть кабинет</button></form>`}
+      <p class="muted"><a href="/h/${hotel.slug}#loyalty">О программе</a></p></div>`,
+  });
+}
+
+export function loyaltyCardPage(hotel, { m, history, bookings, link, fresh = false }) {
+  const pct = m.next ? Math.min(100, Math.round((m.spent / m.next.min_spent) * 100)) : 100;
+  return engineLayout({
+    title: `Карта ${m.card_no}`,
+    hotel,
+    body: html`<div class="container--narrow">
+      ${fresh ? html`<p class="flash flash--success" role="status">Добро пожаловать в программу! Сохраните номер карты — по нему и почте вы входите в кабинет и получаете скидку при бронировании.</p>` : ''}
+      <section class="card loyalty-card">
+        <p class="muted">${hotel.name} · программа «${hotel.loyalty_name}»</p>
+        <h1 class="h2">${m.name}</h1>
+        <p class="loyalty-card__no">Карта <strong data-card>${m.card_no}</strong></p>
+        <dl class="kv"><dt>Баллы</dt><dd><strong>${m.points.toLocaleString('ru-RU')}</strong> (1 балл = 1 ₽)</dd><dt>Уровень</dt><dd>${m.level.name}${m.level.discount_pct ? `, скидка ${m.level.discount_pct}% на проживание` : ''}, начисление ${m.level.earn_pct}%</dd>
+          <dt>Проживаний</dt><dd>${m.stays}, на ${rub(m.spent)}</dd></dl>
+        ${m.next ? html`<p>До уровня «${m.next.name}» — ${rub(m.toNext)} проживаний</p>
+          <div class="meter" role="progressbar" aria-label="Путь до следующего уровня" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>` : html`<p>У вас высший уровень программы.</p>`}
+        <p><a class="btn btn--accent" href="/h/${hotel.slug}">Забронировать со скидкой</a></p>
+      </section>
+      <section class="card"><h2 class="h3">История баллов</h2>
+        ${history.length ? html`<ul class="mini-list">${history.map((t) => html`<li><span>${t.created_at.slice(0, 10).split('-').reverse().join('.')} · ${TX[t.kind] || t.kind}${t.code ? ` (${t.code})` : ''}</span><strong>${t.points > 0 ? '+' : '−'}${Math.abs(t.points).toLocaleString('ru-RU')}</strong></li>`)}</ul>` : html`<p class="muted">Пока пусто.</p>`}
+      </section>
+      <section class="card"><h2 class="h3">Мои брони</h2>
+        ${bookings.length ? html`<ul class="mini-list">${bookings.map((b) => html`<li><span><a href="${b.link}">${b.code}</a> · ${b.start_at ? whenOf(b) : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`}</span>${statusBadge(b.status)}</li>`)}</ul>` : html`<p class="muted">Броней пока нет.</p>`}
+      </section>
+      <form method="post" action="${link}/leave" data-confirm="Выйти из программы? Баллы сгорят, ваши данные участника будут удалены.">
+        <button class="btn btn--ghost btn--sm" type="submit">Выйти из программы</button></form>
     </div>`,
   });
 }

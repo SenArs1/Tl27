@@ -100,6 +100,7 @@ const APP_NAV = [
   ['/app/hourly', 'clock', 'По часам', STAFF, 'hourly'],
   ['/app/bookings', 'list', 'Журнал броней', STAFF],
   ['/app/groups', 'users', 'Группы', STAFF],
+  ['/app/loyalty', 'star', 'Лояльность', STAFF],
   ['/app/housekeeping', 'check', 'Уборка', [...STAFF, 'housekeeping']],
   ['/app/prices', 'calendar', 'Цены и наличие', STAFF],
   ['/app/rooms', 'bed', 'Номера и тарифы', STAFF],

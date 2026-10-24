@@ -3,7 +3,7 @@ import { whenOf } from '../lib/hourly.js';
 import { fmtDate, nightsLabel, diffDays } from '../lib/dates.js';
 import { BRAND } from '../content.js';
 
-const KIND = { payment: 'Оплата', refund: 'Возврат', transfer_in: 'Перенос из брони', transfer_out: 'Перенос в бронь' };
+const KIND = { payment: 'Оплата', refund: 'Возврат', transfer_in: 'Перенос из брони', transfer_out: 'Перенос в бронь', points: 'Оплата баллами' };
 const METHOD = { cash: 'наличные', card: 'карта', transfer: 'перевод', online: 'онлайн' };
 
 function page(title, hotel, body) {
@@ -58,7 +58,7 @@ export function receiptDoc({ hotel, b, payments }) {
     <table>${row('Гость', b.guest_name)}${row('Проживание', b.start_at ? whenOf(b) : `${fmtDate(b.checkin)} — ${fmtDate(b.checkout)}`)}</table>
     <h2 class="doc-h2">Платежи</h2>
     <table><thead><tr><th scope="col">Дата</th><th scope="col">Операция</th><th scope="col">Способ</th><th scope="col">Сумма</th></tr></thead>
-      <tbody>${valid.map((p) => html`<tr><td>${p.created_at.slice(0, 16)}</td><td>${KIND[p.kind] || p.kind}${p.note ? ` (${p.note})` : ''}</td><td>${METHOD[p.method] || p.method}</td><td>${p.amount < 0 ? '−' : ''}${rub(Math.abs(p.amount))}</td></tr>`)}
+      <tbody>${valid.map((p) => html`<tr><td>${p.created_at.slice(0, 16)}</td><td>${KIND[p.kind] || p.kind}${p.note ? ` (${p.note})` : ''}</td><td>${p.kind === 'points' ? 'баллы' : METHOD[p.method] || p.method}</td><td>${p.amount < 0 ? '−' : ''}${rub(Math.abs(p.amount))}</td></tr>`)}
       <tr><th scope="row" colspan="3">Итого оплачено</th><td><strong>${rub(b.paid_amount)}</strong></td></tr>
       <tr><th scope="row" colspan="3">Стоимость брони</th><td>${rub(b.total)}</td></tr></tbody></table>
     <p class="consent">Справка не является кассовым чеком.</p>

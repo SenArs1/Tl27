@@ -19,7 +19,7 @@ Confirmation page with booking code,booking engine,must,yes,yes,
 Guest can find and cancel booking,booking engine,must,yes,yes,
 Embed widget code for hotel site,booking engine,should,yes,yes,"/widget.js, shadow DOM"
 Online payment by card,payments,should,yes,skip,needs the owner's acquirer contract; test method only
-Loyalty program,booking engine,could,yes,partial,only described on the product page; no member accounts
+Loyalty program,booking engine,could,yes,yes,"levels by money spent, site discount, points earned on check-out, paid with points online and at the desk, member cabinet on the site, staff members list"
 Extranet sign in,extranet,must,yes,yes,
 Dashboard with arrivals departures occupancy revenue,extranet,must,yes,yes,
 Bookings list with filters,extranet,must,yes,yes,

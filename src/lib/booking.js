@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { releaseOnCancel } from './loyalty.js';
 import { tx, findFreeRoom, roomIsFree } from '../db.js';
 import { addDays, diffDays, isIsoDate, nightsOf, todayIn, timeIn } from './dates.js';
 
@@ -134,7 +135,7 @@ export function priceStay({ nightly, rate, rates, room = { capacity: 99, extra_b
   const lodgingNet = lodging - promoLodging;
   const tax = taxFor(hotel, lodgingNet, n);
   const stay = lodgingNet + meals - promoMeals;
-  return { base, rateDiscount, single, extraBeds, meals, promoDiscount: promoLodging + promoMeals, tax, stay, total: stay + tax, ...pl };
+  return { base, rateDiscount, single, extraBeds, meals, lodgingNet, promoDiscount: promoLodging + promoMeals, tax, stay, total: stay + tax, ...pl };
 }
 
 export function taxFor(hotel, lodging, nights) {
@@ -224,6 +225,7 @@ export function createBooking(db, hotel, input) {
   const {
     query, roomId, rateId, extraIds = [], guest, payment = 'hotel', idemKey, source = 'site',
     staff = false, physicalRoomId = null, priceOverride = null, createdBy = null, channelRef = null, autoRoom = false,
+    memberId = null, memberPct = 0,
   } = input;
   return tx(db, () => {
     if (idemKey) {
@@ -265,6 +267,13 @@ export function createBooking(db, hotel, input) {
       price.stay = priceOverride;
       price.tax = taxFor(hotel, priceOverride, nights.length);
     }
+    // Loyalty level discount: on the whole stay price, tax follows the reduced lodging.
+    let loyaltyDiscount = 0;
+    if (memberPct > 0 && !(Number.isInteger(priceOverride) && priceOverride >= 0)) {
+      loyaltyDiscount = Math.round((price.stay * memberPct) / 100);
+      price.stay -= loyaltyDiscount;
+      price.tax = taxFor(hotel, Math.round((price.lodgingNet * (100 - memberPct)) / 100), nights.length);
+    }
     const extras = db.prepare('select * from extras where hotel_id = ? and active = 1').all(hotel.id);
     const ex = extrasTotal(extras, extraIds, nights.length, query.adults + query.children);
     const dec = db.prepare('update inventory set available = available - 1 where room_type_id = ? and date = ? and available > 0');
@@ -280,12 +289,13 @@ export function createBooking(db, hotel, input) {
       values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       code, idemKey || null, hotel.id, room.id, rate.id, query.checkin, query.checkout, query.adults, query.children,
       guest.name, guest.email || '', guest.phone, guest.comment || '', JSON.stringify(ex.lines), promo ? promo.code : null,
-      price.stay, ex.total, Math.max(0, price.rateDiscount) + price.promoDiscount, price.extraBeds, price.tax, total,
+      price.stay, ex.total, Math.max(0, price.rateDiscount) + price.promoDiscount + loyaltyDiscount, price.extraBeds, price.tax, total,
       payment === 'card' ? 'card' : 'hotel', prepaid >= total ? 1 : 0, prepaid, source, createdBy, channelRef, JSON.stringify(ages),
     );
     const id = Number(r.lastInsertRowid);
     db.prepare('insert into stay_segments (booking_id, hotel_id, room_type_id, room_id, start, end) values (?,?,?,?,?,?)')
       .run(id, hotel.id, room.id, physical ? physical.id : null, query.checkin, query.checkout);
+    if (memberId) db.prepare('update bookings set member_id = ?, loyalty_discount = ? where id = ?').run(memberId, loyaltyDiscount, id);
     if (prepaid) db.prepare("insert into payments (booking_id, amount, method, note) values (?, ?, 'online', 'Предоплата при бронировании (тест)')").run(id, prepaid);
     logToChannels(db, hotel.id, 'booking', `Бронь ${code}: ${room.name}, ${query.checkin} – ${query.checkout}, наличие обновлено`, source);
     // First line of the change history: who created the booking and from where.
@@ -304,6 +314,7 @@ export function cancelBooking(db, booking) {
     if (fresh.status === 'cancelled') return fresh;
     if (fresh.status !== 'confirmed') throw new BookingError('state', 'Эту бронь уже нельзя отменить');
     returnInventory(db, fresh);
+    releaseOnCancel(db, fresh);
     db.prepare("update bookings set status = 'cancelled' where id = ?").run(fresh.id);
     logToChannels(db, fresh.hotel_id, 'update', `Отмена ${fresh.code}: номера возвращены в продажу`);
     return db.prepare('select * from bookings where id = ?').get(fresh.id);

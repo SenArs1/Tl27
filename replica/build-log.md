@@ -148,3 +148,37 @@ Bugs found while testing v8 and fixed:
 | B21 | — | during design: the `bookings` table requires checkout > checkin, so an hourly stay can't end the same day | check-out date = next day; the real end is kept in `end_at`, and departure lists skip hourly bookings |
 
 Tests: 63 unit/HTTP (+5: rules, cleaning gap and cancel, time change, isolation from nightly sale, HTTP for staff and guests), 51 e2e + 3 deliberate skips (+2 specs on desktop and mobile with axe). A pass at 390px over all 34 cabinet and site pages finds no horizontal scroll.
+
+## Version 9 (loyalty program, 2026-10-24)
+
+Before v9 the program was described only on the product page. Now it works end to end. Design written from scratch.
+
+- **Program terms** (`/app/loyalty/settings`, owner only):
+  - program on/off, its name, welcome points, and the most of a booking that points may pay (30% by default);
+  - levels by money spent on completed stays, each with a discount for direct bookings and a share earned as points. Defaults: Базовый 0 ₽ / 0% / 5%, Серебряный 50 000 ₽ / 5% / 7%, Золотой 150 000 ₽ / 10% / 10%.
+- **Points.** 1 point = 1 ₽.
+  - Earned at check-out on the lodging price minus what was paid with points; services and tax don't count.
+  - Undoing a check-out takes the points and the counted stay back.
+  - A points payment is a separate payment kind, shown as "баллы" in the payment list and on the payment statement.
+  - Cancelling a booking returns spent points automatically; voiding a points payment returns them too.
+  - Every operation is a line in the member's history: who, when, which booking, how many.
+- **Members** (`/app/loyalty`):
+  - search by name, email, phone or card number;
+  - the member page shows level, points, progress to the next level, history and bookings;
+  - staff can add or deduct points by hand (a reason is required, the balance can't go below zero), edit contacts, or remove the member, which deletes the member's personal data and keeps the bookings.
+- **Booking card.** A program block where staff can:
+  - link a member by card number, email or phone, or enrol the guest in one click;
+  - pay with points up to the allowed limit;
+  - apply the level discount;
+  - unlink the member.
+- **Hotel site.**
+  - The hotel page shows a program section with the level table, a join form and a member sign-in.
+  - Joining gives an 8-digit card and the welcome points.
+  - The member cabinet (link signed with HMAC) shows the card, points, level, progress, history and bookings, and has a button to leave the program.
+  - At checkout, a card number with the matching email applies the level discount to the stay, and part of the booking can be paid with points (if more is asked than allowed, the limit is charged and the confirmation says so).
+  - Without a card, a booking whose email belongs to a member is still linked for earning points, but gets no discount and can't be paid with points.
+- **Demo.** The program is on in the demo hotel with 500 welcome points and the three levels.
+
+Not done on purpose: points expiry and email notifications. Both need a scheduler and outgoing mail, which the project doesn't have yet.
+
+Tests: 69 unit/HTTP (+6: levels, enrolment, discount and limits, cancel/void returns, earning and undo, full HTTP flow on site and in the cabinet with isolation), 53 e2e + 3 deliberate skips (+1 spec on desktop and mobile with axe: join → booking with card and points → member in the cabinet). The new pages show no horizontal scroll at 390px.

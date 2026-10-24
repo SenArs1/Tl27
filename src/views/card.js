@@ -15,7 +15,7 @@ export const TABS = [
   ['notes', 'Заметки'],
   ['history', 'История'],
 ];
-const KIND = { payment: 'оплата', refund: 'возврат', transfer_in: 'перенос из другой брони', transfer_out: 'перенос в другую бронь', deposit: 'залог', deposit_return: 'возврат/удержание залога' };
+const KIND = { payment: 'оплата', refund: 'возврат', transfer_in: 'перенос из другой брони', transfer_out: 'перенос в другую бронь', deposit: 'залог', deposit_return: 'возврат/удержание залога', points: 'оплата баллами' };
 const methodName = (m) => (PAY_METHODS.find((x) => x[0] === m) || [m, m === 'transfer' ? 'перевод' : m])[1];
 
 export function tagChips(tags) {
@@ -85,6 +85,7 @@ function detailsTab(p, here) {
         <fieldset class="chips"><legend class="sr-only">Теги брони</legend>${tags.map((t) => html`<label class="chip chip--${t.color}"><input type="checkbox" name="tags" value="${t.id}" ${tagIds.includes(t.id) ? raw('checked') : ''}><span>${t.name}</span></label>`)}</fieldset>
         <div class="actions"><button class="btn btn--secondary" type="submit">Сохранить теги</button><a href="/app/settings/tags">Настроить теги</a></div></form>`
         : html`<p class="muted">Тегов пока нет. <a href="/app/settings/tags">Создайте их в настройках</a> — например «VIP», «Ранний заезд» — и отмечайте брони; на шахматке по ним работает фильтр.</p>`}
+      ${p.loyalty || ''}
       ${live && b.start_at ? hourlyBlock(p, here) : ''}
       ${live && !b.start_at ? html`<h2 class="h3 move-form">Номера и даты</h2>
         <ul class="segments">${segments.map((sg) => html`<li>
@@ -181,9 +182,9 @@ function paymentsTab(p, here) {
     </section>
     <section class="card"><h2 class="h3">Платежи</h2>
       ${payments.length ? html`<ul class="pay-list">${payments.map((x) => html`<li class="${x.voided ? 'is-void' : ''}">
-        <span>${x.created_at.slice(0, 16)} · ${KIND[x.kind] || x.kind} · ${methodName(x.method)}${x.note ? ` · ${x.note}` : ''}${x.voided ? html`<small>аннулирован: ${x.void_reason}</small>` : ''}</span>
+        <span>${x.created_at.slice(0, 16)} · ${KIND[x.kind] || x.kind} · ${x.kind === 'points' ? 'баллы' : methodName(x.method)}${x.note ? ` · ${x.note}` : ''}${x.voided ? html`<small>аннулирован: ${x.void_reason}</small>` : ''}</span>
         <span class="actions"><strong>${x.amount < 0 ? '−' : ''}${rub(Math.abs(x.amount))}</strong>
-        ${!x.voided && ['payment', 'refund'].includes(x.kind) ? html`<details class="row-edit"><summary>Аннулировать</summary><form class="form form--inline" method="post" action="/app/bookings/${b.id}/payments/${x.id}/void">${csrf(req)}<input type="hidden" name="back" value="${here}">
+        ${!x.voided && ['payment', 'refund', 'points'].includes(x.kind) ? html`<details class="row-edit"><summary>Аннулировать</summary><form class="form form--inline" method="post" action="/app/bookings/${b.id}/payments/${x.id}/void">${csrf(req)}<input type="hidden" name="back" value="${here}">
           ${field({ prefix: `vd${x.id}`, name: 'reason', label: 'Причина', attrs: 'required minlength="3" placeholder="ошибочный платёж"' })}<button class="btn btn--danger btn--sm" type="submit">Аннулировать</button></form></details>` : ''}</span></li>`)}</ul>`
         : html`<p class="muted">Платежей ещё не было.</p>`}
       ${depositBlock(p, here)}

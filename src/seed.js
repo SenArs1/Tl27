@@ -1,6 +1,7 @@
 import { hashPassword } from './lib/auth.js';
 import { addDays, isWeekend, todayIn } from './lib/dates.js';
 import { createHotel, addPhysicalRooms } from './lib/hotels.js';
+import { ensureLevels } from './lib/loyalty.js';
 
 export const DEMO = { email: 'demo@stayra.example', password: 'demo12345', hotel: 'severny-bereg' };
 export const ADMIN = { email: 'admin@stayra.example', password: 'admin12345' };
@@ -39,6 +40,9 @@ export function seed(db, now = new Date()) {
     hourly, hour_price, min_hours, max_hours, buffer_min, open_from, open_to) values (?,?,?,?,?,?,?,0,?,?,?,1,900,2,8,30,'09:00','22:00')`)
     .run(hotelId, 'Дневной номер', 'Отдохнуть между поездами или поработать в тишине: душ, кровать, рабочий стол.', 2, 0, 'Двуспальная кровать', 16, 0, 'room-1', types.length).lastInsertRowid);
   addPhysicalRooms(db, hotelId, dayUse, ['Д1', 'Д2'], 1);
+  // Loyalty program on, three levels, 500 welcome points.
+  db.prepare("update hotels set loyalty_on = 1, loyalty_name = 'Друзья Северного берега', loyalty_welcome = 500, loyalty_redeem_pct = 30 where id = ?").run(hotelId);
+  ensureLevels(db, hotelId);
 
   db.prepare("update rate_plans set name = 'Гибкий', description = 'Бесплатная отмена до дня заезда. Оплата при заселении.', extra_adult_price = 1500, extra_child_price = 800 where hotel_id = ?").run(hotelId);
   const flexId = db.prepare('select id from rate_plans where hotel_id = ?').get(hotelId).id;

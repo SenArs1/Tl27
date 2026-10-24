@@ -1,5 +1,6 @@
 import { tx } from '../db.js';
 import { shiftExtraKeys, findInvoice } from './invoices.js';
+import { returnPoints } from './loyalty.js';
 import { BookingError, recalcPaid, addPayment, updateMoney, ratesMap, childGroups, extrasTotal, DEPOSIT_KINDS } from './booking.js';
 
 export const PURPOSES = [['', 'не указана'], ['tourism', 'отдых и туризм'], ['business', 'командировка'], ['treatment', 'лечение'], ['event', 'мероприятие'], ['transit', 'транзит'], ['other', 'другое']];
@@ -46,6 +47,7 @@ export function voidPayment(db, b, paymentId, reason, user) {
     const after = recalcPaid(db, b.id);
     if (after.paid_amount < 0) throw new BookingError('payment', 'После аннулирования оплачено станет меньше нуля — сначала отмените возврат');
     if (depositBalance(db, b.id) < 0) throw new BookingError('payment', 'Часть залога уже возвращена или удержана — аннулировать нельзя');
+    if (p.kind === 'points') returnPoints(db, b, p.amount, `Аннулирована оплата баллами: ${reason}`, user);
     logEvent(db, b, user, 'Платёж аннулирован', `${p.amount.toLocaleString('ru-RU')} ₽`, reason);
     return after;
   });

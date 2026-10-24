@@ -7,6 +7,7 @@ import { quote, TOOLS } from './lib/pricing.js';
 import { loadUser, requirePlatform, createSession, sessionCookie } from './lib/auth.js';
 import { parseSearch, searchOffers, createBooking, cancelBooking, validateGuest, priceStay, findPromo, ensureInventory, ratesMap, childGroups, taxFor, BookingError } from './lib/booking.js';
 import { parseHourly, hourlyOffers, createHourly, priceOf } from './lib/hourly.js';
+import { levelsOf, memberStatus, findMember, normCard, validateMember, enroll, historyOfMember, removeMember, redeem, redeemLimit, pointsUsedOn } from './lib/loyalty.js';
 import { addDays, nightsOf, todayIn } from './lib/dates.js';
 import { createHotel, PROPERTY_TYPES } from './lib/hotels.js';
 import { appRouter } from './routes/app.js';
@@ -119,7 +120,7 @@ export function createApp(db, opts = {}) {
   const sellableRooms = (h) => db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 0 and total_rooms > 0 order by sort, id').all(h.id);
   const hourlyTypes = (h) => db.prepare('select * from room_types where hotel_id = ? and active = 1 and hourly = 1 and total_rooms > 0 order by sort, id').all(h.id);
   const hourlyDefault = (h) => ({ date: addDays(todayIn(h.timezone), 1), start: '12:00', hours: Math.max(2, ...hourlyTypes(h).map((t) => t.min_hours)), adults: 1 });
-  const hotelHome = (h, query, errors = {}) => E.hotelPage(h, sellableRooms(h), query, errors, { types: hourlyTypes(h), q: hourlyDefault(h) });
+  const hotelHome = (h, query, errors = {}) => E.hotelPage(h, sellableRooms(h), query, errors, { types: hourlyTypes(h), q: hourlyDefault(h) }, h.loyalty_on ? levelsOf(db, h.id) : []);
 
   app.get('/h/:hotel', (req, res) => {
     res.send(hotelHome(req.hotel, defaultQuery(req.hotel)));
@@ -173,13 +174,32 @@ export function createApp(db, opts = {}) {
     const v = validateGuest(req.body);
     const idemKey = /^[0-9a-f-]{36}$/.test(req.body.idem || '') ? req.body.idem : crypto.randomUUID();
     const values = { ...req.body, agree: req.body.agree === 'on' };
-    if (!v.ok) return res.status(422).send(E.checkoutPage(req.hotel, { ...ctx, chosen, values, errors: v.errors, idemKey }));
+    // Loyalty: the card number and the guest's email must match a member; without a card the email alone links the stay for points.
+    const errors = { ...v.errors };
+    let member = null;
+    const wantPoints = Math.max(0, int(req.body.points));
+    if (req.hotel.loyalty_on && normCard(req.body.card_no)) {
+      member = findMember(db, req.hotel.id, { card: req.body.card_no, email: v.guest.email });
+      if (!member) errors.card_no = 'Карта не найдена или почта не совпадает с почтой участника';
+    } else if (req.hotel.loyalty_on && wantPoints) errors.points = 'Чтобы оплатить баллами, укажите номер карты';
+    if (member && wantPoints > member.points) errors.points = `На карте ${member.points.toLocaleString('ru-RU')} баллов`;
+    if (Object.keys(errors).length) return res.status(422).send(E.checkoutPage(req.hotel, { ...ctx, chosen, values, errors, idemKey }));
+    const byEmail = !member && req.hotel.loyalty_on ? db.prepare('select * from loyalty_members where hotel_id = ? and email = ?').get(req.hotel.id, v.guest.email) : null;
+    const pct = member ? memberStatus(db, member).level.discount_pct : 0;
     try {
       const b = createBooking(db, req.hotel, {
         query: ctx.query, roomId: ctx.room.id, rateId: ctx.rate.id, extraIds: chosen, guest: v.guest,
         payment: req.body.payment === 'card' && req.hotel.pay_card ? 'card' : 'hotel', idemKey,
+        memberId: (member || byEmail || {}).id || null, memberPct: pct,
       });
-      res.redirect(303, `/h/${req.hotel.slug}/booking/${b.code}?t=${bookingToken(b.code)}&new=1`);
+      let note = '';
+      if (member && wantPoints && !pointsUsedOn(db, b.id)) {
+        const limit = redeemLimit(req.hotel, db.prepare('select * from loyalty_members where id = ?').get(member.id), b, 0);
+        const n = Math.min(wantPoints, limit);
+        if (n > 0) redeem(db, req.hotel, b, member, n);
+        if (n < wantPoints) note = n ? `Баллами оплачено ${n.toLocaleString('ru-RU')} — это предел для этой брони` : 'Баллы не списаны: бронь уже оплачена или превышен предел оплаты баллами';
+      }
+      res.redirect(303, `/h/${req.hotel.slug}/booking/${b.code}?t=${bookingToken(b.code)}&new=1${note ? `&note=${encodeURIComponent(note)}` : ''}`);
     } catch (e) {
       if (!(e instanceof BookingError)) throw e;
       res.status(409).send(E.checkoutPage(req.hotel, { ...ctx, chosen, values, errors: {}, idemKey: crypto.randomUUID(), formError: e.message }));
@@ -229,16 +249,57 @@ export function createApp(db, opts = {}) {
     }
   });
 
+  // ---------- loyalty program ----------
+  const cardToken = (h, m) => crypto.createHmac('sha256', secret).update(`loyalty:${h.id}:${m.card_no}:${m.email}`).digest('base64url').slice(0, 22);
+  const cardLink = (h, m) => `/h/${h.slug}/loyalty/card/${m.card_no}/${cardToken(h, m)}`;
+  const loyaltyOn = (req, res, next) => (req.hotel.loyalty_on ? next() : res.status(404).send(M.notFound()));
+  app.post('/h/:hotel/loyalty/join', loyaltyOn, (req, res) => {
+    const { m, errors } = validateMember(req.body);
+    if (req.body.agree !== 'on') errors.agree = 'Нужно согласие с условиями программы';
+    const values = { ...req.body, agree: req.body.agree === 'on' };
+    if (Object.keys(errors).length) return res.status(422).send(E.loyaltyFormPage(req.hotel, { title: 'Вступить в программу', join: true, values, error: Object.values(errors).join('. ') }));
+    try {
+      const member = enroll(db, req.hotel, m);
+      res.redirect(303, `${cardLink(req.hotel, member)}?new=1`);
+    } catch (e) {
+      if (!(e instanceof BookingError)) throw e;
+      res.status(409).send(E.loyaltyFormPage(req.hotel, { title: 'Вступить в программу', join: true, values, error: 'Эта почта уже в программе — войдите по номеру карты. Если номер потерялся, спросите его на стойке.' }));
+    }
+  });
+  app.get('/h/:hotel/loyalty', loyaltyOn, (req, res) => res.send(E.loyaltyFormPage(req.hotel, { title: 'Кабинет участника' })));
+  app.post('/h/:hotel/loyalty/login', loyaltyOn, (req, res) => {
+    const member = findMember(db, req.hotel.id, { card: req.body.card_no, email: req.body.email });
+    if (!member) return res.status(404).send(E.loyaltyFormPage(req.hotel, { title: 'Кабинет участника', values: req.body, error: 'Карта не найдена или почта не совпадает' }));
+    res.redirect(303, cardLink(req.hotel, member));
+  });
+  const ownCard = (req) => {
+    const m = db.prepare('select * from loyalty_members where hotel_id = ? and card_no = ?').get(req.hotel.id, normCard(req.params.card));
+    return m && req.params.token === cardToken(req.hotel, m) ? m : null;
+  };
+  app.get('/h/:hotel/loyalty/card/:card/:token', loyaltyOn, (req, res) => {
+    const m = ownCard(req);
+    if (!m) return res.status(404).send(E.loyaltyFormPage(req.hotel, { title: 'Кабинет участника', error: 'Ссылка устарела — войдите по номеру карты и почте' }));
+    const bookings = db.prepare('select * from bookings where member_id = ? order by checkin desc').all(m.id)
+      .map((b) => ({ ...b, link: `/h/${req.hotel.slug}/booking/${b.code}?t=${bookingToken(b.code)}` }));
+    res.send(E.loyaltyCardPage(req.hotel, { m: memberStatus(db, m), history: historyOfMember(db, m.id), bookings, link: cardLink(req.hotel, m), fresh: req.query.new === '1' }));
+  });
+  app.post('/h/:hotel/loyalty/card/:card/:token/leave', loyaltyOn, (req, res) => {
+    const m = ownCard(req);
+    if (!m) return res.status(404).send(E.loyaltyFormPage(req.hotel, { title: 'Кабинет участника', error: 'Ссылка устарела — войдите по номеру карты и почте' }));
+    removeMember(db, m);
+    res.send(E.loyaltyFormPage(req.hotel, { title: 'Вы вышли из программы', join: true }));
+  });
+
   const bookingByCode = db.prepare('select * from bookings where code = ? and hotel_id = ?');
   const showBooking = (req, res, b, extra = {}) => {
     const room = db.prepare('select * from room_types where id = ?').get(b.room_type_id);
     const rate = db.prepare('select * from rate_plans where id = ?').get(b.rate_plan_id);
-    res.send(E.confirmationPage(req.hotel, b, room, rate, extra));
+    res.send(E.confirmationPage(req.hotel, b, room, rate, { pointsPaid: pointsUsedOn(db, b.id), ...extra }));
   };
   app.get('/h/:hotel/booking/:code', (req, res) => {
     const b = bookingByCode.get(req.params.code, req.hotel.id);
     if (!b || req.query.t !== bookingToken(b.code)) return res.status(404).send(E.managePage(req.hotel, { error: 'Бронь не найдена. Проверьте номер и почту.' }));
-    showBooking(req, res, b, { justBooked: req.query.new === '1' });
+    showBooking(req, res, b, { justBooked: req.query.new === '1', note: req.query.note ? String(req.query.note).slice(0, 200) : '' });
   });
   app.get('/h/:hotel/manage', (req, res) => res.send(E.managePage(req.hotel, {})));
   app.post('/h/:hotel/manage', (req, res) => {

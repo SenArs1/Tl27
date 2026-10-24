@@ -194,6 +194,41 @@ create table if not exists booking_groups (
   created_at text not null default (datetime('now'))
 );
 create index if not exists booking_groups_hotel on booking_groups(hotel_id, id);
+-- Loyalty program: levels by money spent on completed stays, members with a card number, a points ledger.
+create table if not exists loyalty_levels (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  name text not null,
+  min_spent integer not null default 0,
+  discount_pct integer not null default 0,
+  earn_pct integer not null default 0
+);
+create table if not exists loyalty_members (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  card_no text not null,
+  name text not null,
+  email text not null,
+  phone text not null default '',
+  points integer not null default 0,
+  spent integer not null default 0,
+  stays integer not null default 0,
+  created_at text not null default (datetime('now')),
+  unique (hotel_id, card_no),
+  unique (hotel_id, email)
+);
+create table if not exists loyalty_tx (
+  id integer primary key,
+  hotel_id integer not null references hotels(id) on delete cascade,
+  member_id integer not null references loyalty_members(id) on delete cascade,
+  booking_id integer references bookings(id) on delete set null,
+  kind text not null,
+  points integer not null,
+  note text not null default '',
+  user_name text not null default '',
+  created_at text not null default (datetime('now'))
+);
+create index if not exists loyalty_tx_member on loyalty_tx(member_id, id);
 create table if not exists room_types (
   id integer primary key,
   hotel_id integer not null references hotels(id) on delete cascade,
@@ -332,6 +367,10 @@ const COLUMNS = {
     grid_sort: "text not null default 'category'",
     grid_days: 'integer not null default 14',
     placement_mode: "text not null default 'auto'",
+    loyalty_on: 'integer not null default 0',
+    loyalty_name: "text not null default 'Друзья отеля'",
+    loyalty_welcome: 'integer not null default 0',
+    loyalty_redeem_pct: 'integer not null default 30',
   },
   // kind: housekeeping / investor on top of the stored owner/manager role.
   users: { is_platform_admin: 'integer not null default 0', kind: "text not null default ''" },
@@ -380,6 +419,9 @@ const COLUMNS = {
     group_id: 'integer references booking_groups(id) on delete set null',
     start_at: 'text',
     end_at: 'text',
+    member_id: 'integer references loyalty_members(id) on delete set null',
+    loyalty_discount: 'integer not null default 0',
+    points_earned: 'integer not null default 0',
     checked_in_at: 'text',
     checked_out_at: 'text',
     customer_name: "text not null default ''",
